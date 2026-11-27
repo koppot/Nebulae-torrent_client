@@ -503,15 +503,45 @@ pub mod implementation {
         matched_audio_idx: Option<usize>,
         matched_sub_idx: Option<usize>,
     ) -> Result<(), String> {
+        prepare_from(
+            file_path,
+            false,
+            start_position_ms,
+            matched_audio_idx,
+            matched_sub_idx,
+        )
+    }
+
+    /// AirPlay an HLS playlist served over LAN HTTP (disc restream). The
+    /// receiver pulls the segments from this Mac; no local file is opened.
+    pub fn prepare_session_url(url: &str, start_position_ms: i64) -> Result<(), String> {
+        if !(url.starts_with("http://") || url.starts_with("https://")) {
+            return Err("AirPlay URL sessions accept http(s) URLs only.".into());
+        }
+        prepare_from(url, true, start_position_ms, None, None)
+    }
+
+    fn prepare_from(
+        source: &str,
+        is_url: bool,
+        start_position_ms: i64,
+        matched_audio_idx: Option<usize>,
+        matched_sub_idx: Option<usize>,
+    ) -> Result<(), String> {
+        let file_path = source;
         unsafe {
             // Teardown any lingering prior session before reallocating
             let _ = teardown();
 
             let ns_path = NSString::from_str(file_path);
             let url_cls = class!(NSURL);
-            let file_url: *mut AnyObject = msg_send![url_cls, fileURLWithPath: &*ns_path];
+            let file_url: *mut AnyObject = if is_url {
+                msg_send![url_cls, URLWithString: &*ns_path]
+            } else {
+                msg_send![url_cls, fileURLWithPath: &*ns_path]
+            };
             if file_url.is_null() {
-                return Err("Failed to create file URL for AVFoundation.".into());
+                return Err("Failed to create the URL for AVFoundation.".into());
             }
 
             let asset_cls = class!(AVURLAsset);
@@ -520,7 +550,9 @@ pub mod implementation {
                 return Err("Failed to create AVURLAsset.".into());
             }
 
-            let is_playable: bool = msg_send![asset, isPlayable];
+            // A remote HLS asset is not loaded yet; isPlayable would block on
+            // the network, so AVPlayerItem status reports failures instead.
+            let is_playable: bool = is_url || msg_send![asset, isPlayable];
             if !is_playable {
                 return Err(
                     "File is not playable by AVFoundation without conversion. Native AirPlay requires an Apple-supported format."
@@ -919,6 +951,10 @@ pub mod implementation {
         _matched_audio_idx: Option<usize>,
         _matched_sub_idx: Option<usize>,
     ) -> Result<(), String> {
+        Err("Native AirPlay is only supported on macOS.".into())
+    }
+
+    pub fn prepare_session_url(_url: &str, _start_position_ms: i64) -> Result<(), String> {
         Err("Native AirPlay is only supported on macOS.".into())
     }
 

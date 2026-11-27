@@ -4459,7 +4459,13 @@ pub fn player_device_preflight(
 pub fn player_disc_restream_start(
     state: tauri::State<PlayerState>,
     port: Option<u16>,
+    mode: Option<String>,
 ) -> Result<player::disc_restream::DiscRestreamInfo, String> {
+    let mode = match mode.as_deref() {
+        None | Some("hls") => player::disc_restream::RestreamMode::Hls,
+        Some("ts") => player::disc_restream::RestreamMode::RawTs,
+        Some(other) => return Err(format!("unknown restream mode '{other}' (hls | ts)")),
+    };
     let _mp_guard = state
         .media_player_cell
         .lock()
@@ -4471,7 +4477,152 @@ pub fn player_disc_restream_start(
         &state,
         &resolved,
         port.unwrap_or(player::disc_restream::DEFAULT_PORT),
+        mode,
     )
+}
+
+/// Cast the current file or disc main feature to a libvlc renderer
+/// (Chromecast/DLNA) discovered by the device scan; libvlc transcodes and
+/// speaks the Cast protocol. Local playback is paused, not closed.
+#[tauri::command]
+pub fn player_cast_renderer_start(
+    state: tauri::State<PlayerState>,
+    device_id: String,
+) -> Result<player::disc_restream::DiscRestreamInfo, String> {
+    if device_id.starts_with("airplay:") {
+        return Err("AirPlay devices use player_device_start / player_airplay_disc_start".into());
+    }
+    let item = poison(&state.discovery_manager)
+        .as_ref()
+        .and_then(|dm| dm.get_device(&device_id))
+        .map(|d| d.native_item)
+        .filter(|i| *i != 0)
+        .ok_or("That device is no longer discovered; rescan and try again")?;
+    let _mp_guard = state
+        .media_player_cell
+        .lock()
+        .map_err(|_| "player state poisoned")?;
+    let resolved = poison(&state.current_resolved)
+        .clone()
+        .or_else(|| poison(&state.current_path).clone())
+        .ok_or("No media is loaded; start playback first")?;
+    let lib = loaded_lib(&state)?;
+    let mp = *poison(&state.media_player);
+    let start_time_s = if mp != 0 {
+        (unsafe { (lib.libvlc_media_player_get_time)(mp as *mut c_void) }.max(0) as f64) / 1000.0
+    } else {
+        0.0
+    };
+    let info = player::disc_restream::start(
+        &state,
+        &resolved,
+        player::disc_restream::DEFAULT_PORT,
+        player::disc_restream::RestreamMode::Renderer { item, start_time_s },
+    )?;
+    if mp != 0 {
+        unsafe {
+            if let Some(set_pause) = lib.libvlc_media_player_set_pause {
+                set_pause(mp as *mut c_void, 1);
+            } else {
+                (lib.libvlc_media_player_pause)(mp as *mut c_void);
+            }
+        }
+    }
+    Ok(info)
+}
+
+/// Stop the renderer/HLS restream and resume local playback.
+#[tauri::command]
+pub fn player_cast_renderer_stop(state: tauri::State<PlayerState>) -> Result<(), String> {
+    let _mp_guard = state
+        .media_player_cell
+        .lock()
+        .map_err(|_| "player state poisoned")?;
+    player::disc_restream::stop(&state);
+    let mp = *poison(&state.media_player);
+    if mp != 0 {
+        let lib = loaded_lib(&state)?;
+        unsafe {
+            if let Some(set_pause) = lib.libvlc_media_player_set_pause {
+                set_pause(mp as *mut c_void, 0);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// AirPlay the current disc: restream the main feature as HLS over LAN
+/// HTTP and hand that URL to the native AVPlayer (which AirPlays it).
+/// Files keep using player_device_start (receiver-native, unchanged).
+#[tauri::command]
+pub async fn player_airplay_disc_start(
+    state: tauri::State<'_, PlayerState>,
+) -> Result<player::disc_restream::DiscRestreamInfo, String> {
+    let info = {
+        let _mp_guard = state
+            .media_player_cell
+            .lock()
+            .map_err(|_| "player state poisoned")?;
+        let resolved = poison(&state.current_resolved)
+            .clone()
+            .ok_or("No media is loaded; start the disc first")?;
+        player::disc_restream::start(
+            &state,
+            &resolved,
+            player::disc_restream::DEFAULT_PORT,
+            player::disc_restream::RestreamMode::Hls,
+        )?
+    };
+    // AVPlayer needs at least one finished segment in the playlist.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
+        let ready = poison(&state.disc_restream)
+            .as_ref()
+            .and_then(|r| r.lan.as_ref().map(|l| l.ready_segments()))
+            .unwrap_or(0);
+        if ready >= 2 {
+            break;
+        }
+        if std::time::Instant::now() > deadline {
+            player::disc_restream::stop(&state);
+            return Err("The disc stream produced no segments within 60 s".into());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+    if let Err(e) = player::airplay_macos::implementation::prepare_session_url(&info.url, 0) {
+        player::disc_restream::stop(&state);
+        return Err(e);
+    }
+    let _mp_guard = state
+        .media_player_cell
+        .lock()
+        .map_err(|_| "player state poisoned")?;
+    let mp = *poison(&state.media_player);
+    let media_path = poison(&state.current_path).clone().unwrap_or_default();
+    let mut position_ms = 0;
+    if mp != 0 {
+        let lib = loaded_lib(&state)?;
+        unsafe {
+            position_ms = (lib.libvlc_media_player_get_time)(mp as *mut c_void).max(0);
+            if let Some(set_pause) = lib.libvlc_media_player_set_pause {
+                set_pause(mp as *mut c_void, 1);
+            }
+        }
+    }
+    let snapshot = player::output::PlaybackRecoverySnapshot {
+        media_path,
+        position_ms,
+        was_paused: false,
+        audio_track_id: None,
+        audio_track_name: None,
+        audio_track_idx: None,
+        subtitle_track_id: None,
+        subtitle_track_name: None,
+        subtitle_track_idx: None,
+    };
+    let mut coord = state.output_coordinator.lock().unwrap();
+    coord.set_airplay_preparing("AirPlay".to_string(), snapshot);
+    Ok(info)
 }
 
 /// Stop the disc restream and release its media player. Safe to call when
