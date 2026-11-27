@@ -162,3 +162,58 @@ pub fn spawn_peer_history_loop(engine: SharedEngine, db: Arc<Database>) {
         }
     });
 }
+
+/// D23: sample the engine's incoming-port reachability every five minutes and
+/// log the first reading plus every transition. A long session log then shows
+/// when the listening port opened or closed, so the cause (router mapping,
+/// VPN, engine restart, check logic) can be correlated with other log lines
+/// before any fix is attempted. The probe is the daemon's own bounded
+/// port-test RPC, identical to the connectivity doctor's.
+pub fn spawn_port_watch_loop(engine: SharedEngine, db: Arc<Database>) {
+    tauri::async_runtime::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(300));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut last: Option<Option<bool>> = None;
+        loop {
+            interval.tick().await;
+            let engine = Arc::clone(&engine);
+            let reading =
+                match tokio::task::spawn_blocking(move || engine.check_port_open(None)).await {
+                    Ok(reading) => reading,
+                    Err(error) => {
+                        tracing::warn!("[port-watch] probe worker failed: {error}");
+                        continue;
+                    }
+                };
+            let port = listening_port_from_settings(&db);
+            match last {
+                None => tracing::info!(port, open = ?reading, "[port-watch] initial sample"),
+                Some(prev) if prev != reading => tracing::info!(
+                    port,
+                    prev = ?prev,
+                    now = ?reading,
+                    "[port-watch] port reachability changed"
+                ),
+                _ => {}
+            }
+            last = Some(reading);
+        }
+    });
+}
+
+/// The port the engine listens on, read from the stored user settings. The
+/// stale stock 51413 is mapped to 41413 exactly like the connectivity doctor.
+fn listening_port_from_settings(db: &Database) -> u16 {
+    let stored = db
+        .get_setting("user_settings_json")
+        .ok()
+        .flatten()
+        .and_then(|s| serde_json::from_str::<crate::commands::settings::UserSettings>(&s).ok())
+        .map(|s| s.listening_port)
+        .unwrap_or(41413);
+    if stored == 51413 {
+        41413
+    } else {
+        stored
+    }
+}

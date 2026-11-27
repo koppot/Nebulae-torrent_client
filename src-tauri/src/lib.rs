@@ -380,6 +380,8 @@ pub fn run() {
     let engine_for_telemetry = Arc::clone(&local_engine);
     let engine_for_peer_history = Arc::clone(&local_engine);
     let db_for_peer_history = Arc::clone(&db);
+    let engine_for_port_watch = Arc::clone(&local_engine);
+    let db_for_port_watch = Arc::clone(&db);
     let engine_for_watcher = Arc::clone(&local_engine);
     let db_for_watcher = Arc::clone(&db);
     let engine_for_rss = Arc::clone(&local_engine);
@@ -513,6 +515,9 @@ pub fn run() {
                 engine_for_peer_history,
                 db_for_peer_history,
             );
+            // D23: log port reachability transitions over the session so the
+            // "listening port closes mid-session" report can be attributed.
+            engine::telemetry::spawn_port_watch_loop(engine_for_port_watch, db_for_port_watch);
             engine::watcher::spawn_watched_folder_loop(engine_for_watcher, db_for_watcher);
             engine::rss::spawn_rss_loop(engine_for_rss, db_for_rss);
             commands::tracker::spawn_stats_poller(db_for_stats_poller);
@@ -881,6 +886,7 @@ pub fn run() {
             commands::adc_device::get_adc_device_info,
             commands::adc_device::register_adc_device,
             commands::adc_device::redeem_adc_delivery,
+            commands::adc_device::set_adc_device_priority,
             // Smart Peering
             commands::peering::get_peering_settings,
             commands::peering::save_peering_settings,
