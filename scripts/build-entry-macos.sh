@@ -26,6 +26,7 @@
 set -euo pipefail
 
 COMMIT=""; VERSION=""; TARGET="aarch64-apple-darwin"; OUT=""; SIGN_IDENTITY="${APPLE_SIGNING_IDENTITY:-}"
+BASELINE="${NEBULAE_BASELINE_DMG:-}"
 while [ $# -gt 0 ]; do
     case "$1" in
         --commit) COMMIT="$2"; shift 2 ;;
@@ -33,6 +34,7 @@ while [ $# -gt 0 ]; do
         --target) TARGET="$2"; shift 2 ;;
         --out) OUT="$2"; shift 2 ;;
         --sign-identity) SIGN_IDENTITY="$2"; shift 2 ;;
+        --baseline) BASELINE="$2"; shift 2 ;;
         *) echo "unknown arg: $1" >&2; exit 2 ;;
     esac
 done
@@ -218,6 +220,25 @@ esac
 ./scripts/verify-macos-app.sh "$MOUNTED_APP" || { [ "$TARGET" != "aarch64-apple-darwin" ] || { echo "FAIL: verify-macos-app.sh on the mounted dmg" >&2; exit 1; }; }
 echo "==> Mounted dmg check passed (read-only; nothing installed)."
 
+# --- 9. Baseline-diff gate (completeness rules item 1) ----------------------
+# Compares the delivered dmg against the accepted baseline dmg by RELATIVE
+# path (hdiutil-mounted read-only by the script itself). Every difference
+# must be classified in scripts/baseline-allow/macos.tsv. Pass --baseline
+# <accepted.dmg> (or set NEBULAE_BASELINE_DMG); without a baseline the gate
+# CANNOT run and the BUILD RECORD says so — the release checklist then keeps
+# the candidate blocked until the comparison is run.
+BASELINE_DIFF_STATUS="NOT RUN (no baseline passed)"
+if [ -n "$BASELINE" ]; then
+    [ -f "$BASELINE" ] || { echo "FAIL: baseline dmg not found: $BASELINE" >&2; exit 1; }
+    ./scripts/baseline_diff.py \
+        --baseline "$BASELINE" \
+        --candidate "$OUT/$DMG_NAME" \
+        --allow scripts/baseline-allow/macos.tsv \
+        --report "$OUT/baseline-diff.md" \
+        || { echo "FAIL: baseline-diff gate — differences not classified in scripts/baseline-allow/macos.tsv (full report: $OUT/baseline-diff.md)" >&2; exit 1; }
+    BASELINE_DIFF_STATUS="PASS vs $(basename "$BASELINE") (report: $OUT/baseline-diff.md)"
+fi
+
 SIZE=$(stat -f%z "$OUT/$DMG_NAME")
 SHA=$(shasum -a 256 "$OUT/$DMG_NAME" | awk '{print $1}')
 {
@@ -240,5 +261,6 @@ echo "signing: ad-hoc seal (release policy: no Developer ID, not notarized; code
 echo "signing: TEST build, identity '$SIGN_IDENTITY' (codesign --verify --deep --strict passed before packaging)"
 ;;
 esac
+echo "baseline-diff gate: $BASELINE_DIFF_STATUS"
 } | tee "$OUT/BUILD-RECORD.txt"
 echo "Record installer name, size, SHA-256, gate results and duration on the Task 5 report page."

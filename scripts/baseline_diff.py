@@ -174,16 +174,24 @@ def main():
         with open(args.report, "w") as fh:
             fh.write(text + "\n")
 
-    allowed = set()
+    allowed = []
     if args.allow:
         with open(args.allow) as fh:
             for line in fh:
                 line = line.rstrip("\n")
                 if not line or line.startswith("#"):
                     continue
-                allowed.add(line.split("\t")[0].strip())
+                allowed.append(line.split("\t")[0].strip())
 
-    unclassified = [r for r in only_base + only_cand + changed if r not in allowed]
+    def is_allowed(rel):
+        # Exact path, or a directory prefix: an entry ending in "/" allows
+        # every path below it (used for trees that differ wholesale, e.g. a
+        # JRE rebuild with the same pin).
+        return any(rel == a or (a.endswith("/") and rel.startswith(a))
+                   for a in allowed)
+
+    unclassified = [r for r in only_base + only_cand + changed
+                    if not is_allowed(r)]
     if args.allow is None:
         print(f"\nINSPECTION RUN: {len(unclassified)} differences not classified "
               "(pass --allow for a gate run)")

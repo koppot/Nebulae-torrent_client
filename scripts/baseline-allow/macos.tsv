@@ -1,0 +1,17 @@
+# macOS baseline-diff allow list — gate: scripts/baseline_diff.py --allow THIS FILE
+# Baseline: the accepted previous-candidate dmg (SHA-256 56e421fc212f1ebf8118e8f96d8e8d0773edc640cd69a3222f14783f514cc985,
+# recorded on the Task 5 page and the release-completeness rules page).
+# Every difference must match one entry here (exact path, or a directory
+# prefix ending in "/"); anything else FAILS the build. The full per-file
+# report is written next to the artifacts (baseline-diff.md); its component
+# byte totals are part of the release review.
+# NOTE: this comparison walks the .app (below Contents). The dmg ROOT files
+# (READ ME FIRST.txt, .background/*, .DS_Store, .VolumeIcon.icns,
+# Applications link) are verified by the DMG ROOT GATE in
+# package-macos-dmg.sh, not here.
+Resources/resources/jre/	Temurin 21.0.13+9 rebuild noise (same pin both sides; totals reviewed in baseline-diff.md)
+Resources/resources/vlc/lib/libvlc.5.dylib	rebuild/signature noise (measured earlier: 86 of 167,872 B differ)
+Resources/resources/engine/tailscale/	tailscale 1.104.1 rebuild noise (measured +184,386 B between previous candidates)
+Resources/resources/engine/transmission/	transmission rebuild noise; gettext-0.21/libiconv-1.17 licenses present (measured)
+Resources/resources/build-manifest.json	generated at staging; not tracked in git
+MacOS/nebulae	version and code changes between the baseline commit and this candidate
