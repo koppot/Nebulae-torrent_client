@@ -1,14 +1,127 @@
-# Windows baseline-diff allow list — gate: scripts/windows/verify-baseline.ps1
-# Baseline: the CORRECTED v0.2.8 installer payload (the rules page lists it
-# as the accepted Windows baseline). Differences are matched by exact path
-# or directory prefix; anything unlisted FAILS.
-# The v0.2.8 -> 0.2.9 candidate changes below are seeded from the measured
-# three-way comparison (Task 5 section 4) and must be re-reviewed at gate
-# time against the baseline-diff report.
-resources/vlc/	0.2.9 carries the staged VLC runtime (Task 1 manifest); totals reviewed
-resources/jre/	Temurin rebuild noise (pinned 21.0.13+9 both sides)
-resources/engine/	tailscale/transmission updates between baselines
-resources/licenses/	license tree updates (gettext-0.21/libiconv-1.17 measured)
-resources/geo/	EXCEPT this one: geo is pinned and must match — DELETE this line before a real gate run so geo drift fails
-$PLUGINSDIR/	NSIS payload differences between installer generations
-nebulae.exe	version and code changes between the baseline commit and this candidate
+# Windows baseline-diff allow list - gate: scripts/windows/verify-baseline.ps1
+#
+# Baseline: the CORRECTED v0.2.8 installer payload. Candidate: the 0.2.9
+# installer. Differences are matched by exact path or a directory prefix
+# (an entry ending in '/'); anything unlisted FAILS the gate.
+#
+# Derived 2026-11-27 from a MEASURED comparison: the corrected v0.2.8
+# payload tree vs scripts/windows/stage_runtime.py output (pinned inputs
+# cache, patched VLC overlay, --frozen-daemon, staged geo). The broad
+# prefixes of the previous list (resources/vlc/, resources/jre/,
+# resources/engine/, resources/geo/) were removed: geo must match the
+# pinned hashes (measured byte-identical), the JRE delta is the exact
+# Temurin 21.0.12+8 -> 21.0.13+9 file set, and the transmission
+# runtime/daemon must match (no entry on purpose: the frozen daemon is
+# byte-identical to the baseline daemon, so any drift FAILS).
+# Installer-level, per NSIS build (runtime, not payload):
+$PLUGINSDIR/	NSIS plugin/wizard runtime, regenerated per installer build
+$TEMP/	the embedded WebView2 offline installer (pinned by inputs.lock.json)
+WebView2Loader.dll	moved from the installer root into resources/ in 0.2.9
+app.ico	NSIS-generated installer icon, per build
+uninstall.exe	NSIS-generated uninstaller, per build
+nebulae.exe	app binary: version and code changes 0.2.8 -> 0.2.9
+# Source-control placeholders that were never shipped content:
+resources/.gitkeep	placeholder removed in 0.2.9
+resources/engine/.gitkeep	placeholder removed in 0.2.9
+resources/geo/.gitkeep	placeholder removed in 0.2.9 (geo DBs themselves must MATCH)
+resources/player/.gitkeep	placeholder removed in 0.2.9
+# VLC files the 0.2.9 staging deny list excludes (stage_runtime.py VLC_DENY_*)
+# plus the old BD-J jars the 1.5.0 drop replaces:
+resources/vlc/axvlc.dll	browser-plugin binary, excluded by the 0.2.9 deny list
+resources/vlc/npvlc.dll	browser-plugin binary, excluded by the 0.2.9 deny list
+resources/vlc/vlc.ico	excluded by the 0.2.9 deny list
+resources/vlc/locale/as_IN/LC_MESSAGES/vlc.mo	locale file not staged in 0.2.9
+resources/vlc/msi/	excluded whole-directory by the 0.2.9 deny list (6 files measured)
+resources/vlc/skins/	excluded whole-directory by the 0.2.9 deny list (6 files measured)
+resources/vlc/plugins/access/libbluray-awt-j2se-1.3.2.jar	old BD-J jar replaced by the 1.5.0 drop
+resources/vlc/plugins/access/libbluray-awt-j2se-1.4.0.jar	old BD-J jar replaced by the 1.5.0 drop
+resources/vlc/plugins/access/libbluray-j2se-1.3.2.jar	old BD-J jar replaced by the 1.5.0 drop
+resources/vlc/plugins/access/libbluray-j2se-1.4.0.jar	old BD-J jar replaced by the 1.5.0 drop
+# New in the 0.2.9 candidate (measured, exact paths):
+resources/engine/transmission/concrt140.dll	app-local VC++/curl/ssl/zlib runtime next to the daemon (extracted from pinned VC_redist)
+resources/engine/transmission/libcrypto-3-x64.dll	app-local VC++/curl/ssl/zlib runtime next to the daemon (extracted from pinned VC_redist)
+resources/engine/transmission/libcurl.dll	app-local VC++/curl/ssl/zlib runtime next to the daemon (extracted from pinned VC_redist)
+resources/engine/transmission/libssl-3-x64.dll	app-local VC++/curl/ssl/zlib runtime next to the daemon (extracted from pinned VC_redist)
+resources/engine/transmission/msvcp140_1.dll	app-local VC++/curl/ssl/zlib runtime next to the daemon (extracted from pinned VC_redist)
+resources/engine/transmission/msvcp140_2.dll	app-local VC++/curl/ssl/zlib runtime next to the daemon (extracted from pinned VC_redist)
+resources/engine/transmission/msvcp140_atomic_wait.dll	app-local VC++/curl/ssl/zlib runtime next to the daemon (extracted from pinned VC_redist)
+resources/engine/transmission/msvcp140_codecvt_ids.dll	app-local VC++/curl/ssl/zlib runtime next to the daemon (extracted from pinned VC_redist)
+resources/engine/transmission/vcamp140.dll	app-local VC++/curl/ssl/zlib runtime next to the daemon (extracted from pinned VC_redist)
+resources/engine/transmission/vccorlib140.dll	app-local VC++/curl/ssl/zlib runtime next to the daemon (extracted from pinned VC_redist)
+resources/engine/transmission/vcomp140.dll	app-local VC++/curl/ssl/zlib runtime next to the daemon (extracted from pinned VC_redist)
+resources/engine/transmission/vcruntime140_threads.dll	app-local VC++/curl/ssl/zlib runtime next to the daemon (extracted from pinned VC_redist)
+resources/engine/transmission/zlib.dll	app-local VC++/curl/ssl/zlib runtime next to the daemon (extracted from pinned VC_redist)
+resources/vlc/AUTHORS.txt	stock-zip text file now staged in 0.2.9
+resources/vlc/NEWS.txt	stock-zip text file now staged in 0.2.9
+resources/vlc/README.txt	stock-zip text file now staged in 0.2.9
+resources/vlc/THANKS.txt	stock-zip text file now staged in 0.2.9
+# Content changes (measured, exact paths):
+resources/build-manifest.json	staging manifest, per build
+resources/licenses/README.txt	license/patch text update in 0.2.9
+resources/licenses/vlc-3.0.23/patches/README.md	license/patch text update in 0.2.9
+resources/licenses/vlc-3.0.23/patches/bluray-menu-first.patch	license/patch text update in 0.2.9
+resources/licenses/vlc-3.0.23/patches/d3d11-hdr-sdr-tonemap.patch	license/patch text update in 0.2.9
+resources/vlc/plugins/access/liblibbluray_plugin.dll	patched Blu-ray plugin rebuild (0.2.9 libbluray 1.5.0 patch set)
+# JRE: Temurin 21.0.12+8 (0.2.8 baseline) -> 21.0.13+9 (0.2.9 default),
+# the build the published 0.2.7 shipped. Every differing file is listed:
+resources/jre/bin/awt.dll	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/bin/dt_socket.dll	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/bin/extnet.dll	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/bin/fontmanager.dll	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/bin/freetype.dll	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/bin/instrument.dll	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/bin/j2gss.dll	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/bin/j2pcsc.dll	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/bin/j2pkcs11.dll	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/bin/jaas.dll	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/bin/jabswitch.exe	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/bin/jaccessinspector.exe	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/bin/jaccesswalker.exe	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/bin/java.dll	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/bin/java.exe	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/bin/javaaccessbridge.dll	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/bin/javajpeg.dll	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/bin/javaw.exe	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/bin/jawt.dll	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/bin/jdwp.dll	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/bin/jfr.exe	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/bin/jimage.dll	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/bin/jli.dll	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/bin/jrunscript.exe	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/bin/jsound.dll	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/bin/jsvml.dll	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/bin/jwebserver.exe	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/bin/keytool.exe	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/bin/kinit.exe	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/bin/klist.exe	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/bin/ktab.exe	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/bin/lcms.dll	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/bin/management.dll	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/bin/management_agent.dll	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/bin/management_ext.dll	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/bin/mlib_image.dll	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/bin/net.dll	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/bin/nio.dll	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/bin/prefs.dll	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/bin/rmi.dll	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/bin/rmiregistry.exe	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/bin/server/classes.jsa	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/bin/server/classes_nocoops.jsa	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/bin/server/jvm.dll	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/bin/splashscreen.dll	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/bin/sspi_bridge.dll	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/bin/sunmscapi.dll	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/bin/syslookup.dll	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/bin/verify.dll	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/bin/w2k_lsa_auth.dll	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/bin/windowsaccessbridge-64.dll	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/bin/zip.dll	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/conf/security/java.security	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/lib/jrt-fs.jar	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/lib/jvm.lib	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/lib/modules	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/lib/security/cacerts	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/lib/security/default.policy	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/lib/tzdb.dat	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/lib/tzmappings	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)
+resources/jre/release	Temurin 21.0.12+8 -> 21.0.13+9 (A12=YES, per-file hashes pinned in jre-21013-files.sha256)

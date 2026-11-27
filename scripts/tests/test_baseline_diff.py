@@ -4,7 +4,10 @@
 Covers: relative-path comparison, only-in-baseline / only-in-candidate /
 changed detection, component totals, the --allow gate (exit 1 on any
 unclassified difference, exit 0 when all are covered, inspection run exits 0
-without --allow), and .app-root normalization (Resources/ stripped).
+without --allow), .app-root normalization (Resources/ stripped), and a guard
+on the shipped windows.tsv: no broad directory prefix (geo/vlc/jre/engine)
+may hide a changed file, and a changed file under a protected prefix must
+fail the gate by exact path.
 
 Run: python3 scripts/tests/test_baseline_diff.py
 """
@@ -129,6 +132,34 @@ def main():
             rep = fh.read()
         if "| TOTAL |" not in rep or "Component byte totals" not in rep:
             failures.append("report.md missing totals table")
+
+        # 6. The SHIPPED windows.tsv must not hide a changed file behind a
+        # broad prefix. Measured derivation (2026-11-27): geo matches the
+        # pinned hashes, the JRE delta is listed file-by-file, and the
+        # transmission tree has no entry on purpose. Build synthetic trees
+        # that change one file under each protected prefix; the real allow
+        # list must FAIL the gate and name the file.
+        windows_tsv = os.path.join(HERE, "..", "baseline-allow", "windows.tsv")
+        with open(windows_tsv) as fh:
+            shipped = [ln.split("\t")[0].strip() for ln in fh
+                       if ln.strip() and not ln.startswith("#")]
+        for banned in ("resources/geo/", "resources/vlc/", "resources/jre/",
+                       "resources/engine/"):
+            if banned in shipped:
+                failures.append(f"windows.tsv re-added broad prefix: {banned}")
+        for prefix in ("resources/geo/", "resources/jre/"):
+            b2 = os.path.join(tmp, "b2")
+            c2 = os.path.join(tmp, "c2")
+            probe = prefix + "probe.bin"
+            build(b2, {probe: b"original content" + b"\0" * 32})
+            build(c2, {probe: b"TAMPERED CONTENT" + b"\0" * 32})
+            r = run(["--baseline", b2, "--candidate", c2,
+                     "--allow", windows_tsv])
+            if r.returncode != 1:
+                failures.append(f"changed file under {prefix} was hidden by "
+                                "windows.tsv (gate exited 0)")
+            elif probe not in r.stderr:
+                failures.append(f"gate under {prefix} did not name {probe}")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -137,7 +168,7 @@ def main():
         for f in failures:
             print(f"  - {f}")
         return 1
-    print("test_baseline_diff: OK (5 scenarios)")
+    print("test_baseline_diff: OK (7 scenarios)")
     return 0
 
 
