@@ -28,6 +28,12 @@
 //! - Menus are not available on the receiver: the main feature title is
 //!   streamed directly.
 //! - File casting is untouched (AirPlay receiver-native path unchanged).
+//! - UHD (4K Blu-ray) casting is NOT measured and NOT claimed: every
+//!   measurement above is a DVD (720x480) or a plain file. Nothing here says
+//!   UHD or HDR discs work through it.
+//! - AirPlay to an Apple TV is macOS-only (native AVPlayer). Windows has no
+//!   AirPlay sender (see the Task 5 research); only the libvlc renderer path
+//!   (Chromecast/DLNA) and the HLS URL exist there.
 //!
 //! The restream runs on its OWN media player created from the shared
 //! libvlc instance; the local playback session is neither stopped nor
