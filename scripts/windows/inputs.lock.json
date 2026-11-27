@@ -58,9 +58,19 @@
       "sha256": "b8aa18fef5edb69bee8618f99677d66d0873d22cb40d974c15ac9ffcdecf73ba",
       "bytes": 48993215,
       "version": "21.0.12+8",
-      "role": "runtime: Java for BD-J menus (JAVA_HOME is set to resources/jre)",
+      "role": "runtime: Java for BD-J menus (JAVA_HOME is set to resources/jre). DEFAULT JRE input (0.2.8 baseline).",
       "license": "GPL-2.0 with the Classpath Exception; the archive carries NOTICE and legal/",
       "checked_against": "GitHub release asset digest (gh api repos/adoptium/temurin21-binaries/releases/tags/jdk-21.0.12+8)"
+    },
+    "temurin-jre-21013": {
+      "file": "OpenJDK21U-jre_x64_windows_hotspot_21.0.13_9.zip",
+      "url": "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.13%2B9/OpenJDK21U-jre_x64_windows_hotspot_21.0.13_9.zip",
+      "sha256": "2332c0b4cff6bed722da3567c91d5e47568bcba863fa4945d0a8d6fc76158628",
+      "bytes": 49106397,
+      "version": "21.0.13+9",
+      "role": "runtime: Java for BD-J menus (JAVA_HOME is set to resources/jre). A12 ALTERNATE input - the JRE 0.2.7 shipped; only used when the build is explicitly run with --jre-input temurin-jre-21013 (NEBULAE_JRE_INPUT) after the user approves the JRE switch. Default builds keep temurin-jre.",
+      "license": "GPL-2.0 with the Classpath Exception; the archive carries NOTICE and legal/",
+      "checked_against": "GitHub release asset digest (gh api repos/adoptium/temurin21-binaries/releases/tags/jdk-21.0.13+9; asset digest sha256:2332c0b4... measured 2026-11-26)"
     },
     "vc-redist-x64": {
       "file": "VC_redist.x64.exe",

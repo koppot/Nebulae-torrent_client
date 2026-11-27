@@ -20,6 +20,7 @@ import argparse
 import csv
 import hashlib
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -122,8 +123,10 @@ def main() -> int:
         rep.add("1.5.0 BD-J jars", len(need) == len(exp["required_present"]),
                 f"{len(need)}/{len(exp['required_present'])} present")
 
-        # --- Pinned hashes (VLC, engine, WebView2, JRE anchors) ---
+        # --- Pinned hashes (VLC, engine, WebView2; JRE anchors verified per-input below) ---
         for rel, meta in exp["pinned"].items():
+            if rel.startswith("resources/jre/"):
+                continue  # A12: verified against the identified JRE input
             p = root / rel
             if not p.is_file():
                 rep.add(f"pin {rel}", False, "MISSING")
@@ -148,11 +151,57 @@ def main() -> int:
         else:
             rep.add("daemon patch markers", False, "transmission-daemon.exe not found")
 
-        # --- JRE tree count ---
+        # --- JRE tree: identify the input, then verify per-input (A12) ---
         jre = root / "resources" / "jre"
         jre_files = sum(1 for p in jre.rglob("*") if p.is_file())
-        rep.add("jre file count", jre_files == exp["baseline_jre_files_028"],
-                f"{jre_files} (0.2.8 baseline {exp['baseline_jre_files_028']}; differs if rev4-d JRE packet is applied)")
+        release_path = jre / "release"
+        jre_inputs = exp.get("jre_inputs", {})
+        identified = None
+        if release_path.is_file():
+            release_text = release_path.read_text(encoding="utf-8", errors="replace")
+            for impl in re.findall(r'IMPLEMENTOR_VERSION="([^"]+)"', release_text):
+                m = re.search(r"Temurin-(\d+\.\d+\.\d+\+\d+)", impl)
+                if m:
+                    identified = m.group(1)
+                    break
+        entry = next(
+            (
+                v
+                for v in jre_inputs.values()
+                if isinstance(v, dict) and v.get("version") == identified
+            ),
+            None,
+        ) if identified else None
+        if entry is None:
+            known = ", ".join(
+                str(v.get("version", "?"))
+                for v in jre_inputs.values()
+                if isinstance(v, dict)
+            )
+            rep.add(
+                "jre input identified",
+                False,
+                "IMPLEMENTOR_VERSION in resources/jre/release does not match any expected"
+                f" JRE input ({known or 'none defined'})",
+            )
+        else:
+            rep.add("jre input identified", True, f"Temurin {entry['version']}")
+            rep.add(
+                "jre file count",
+                jre_files == entry["files"],
+                f"{jre_files} (expected {entry['files']} for {entry['version']})",
+            )
+            for label, path_name, size_key, hash_key in (
+                ("jre release file", "release", "release_size", "release_sha256"),
+                ("jre jvm.dll", "bin/server/jvm.dll", "jvm_dll_size", "jvm_dll_sha256"),
+            ):
+                p = jre / path_name
+                if not p.is_file():
+                    rep.add(label, False, "MISSING")
+                    continue
+                got = sha256(p)
+                ok = p.stat().st_size == entry[size_key] and got == entry[hash_key]
+                rep.add(label, ok, f"{p.stat().st_size} B {got[:16]}…")
 
         # --- GNU build: nebulae.exe must not import vcruntime140 (MSVC) ---
         exe = root / "nebulae.exe"

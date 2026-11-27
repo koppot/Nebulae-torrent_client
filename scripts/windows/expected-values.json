@@ -145,6 +145,25 @@
       "sha256": "e92b9a0cbe431c5ed0b6ffd55932a04b23df812d77d282859f1a3e6f35218448"
     }
   },
+  "jre_inputs": {
+    "_note": "A12: per-JRE-input verify expectations. The staged input is identified by IMPLEMENTOR_VERSION in resources/jre/release. temurin-jre (21.0.12+8) is the default and 0.2.8 baseline; temurin-jre-21013 (21.0.13+9, the 0.2.7 JRE) is measured from the official Adoptium zip (sha256 2332c0b4..., asset digest checked 2026-11-26) and is only valid in builds the user approved for the JRE switch.",
+    "temurin-jre": {
+      "version": "21.0.12+8",
+      "files": 315,
+      "release_size": 1652,
+      "release_sha256": "389a72d8652a886b4304ec33836cb632df76ae7cce2b7f1c054cff8af3183066",
+      "jvm_dll_size": 13919864,
+      "jvm_dll_sha256": "e92b9a0cbe431c5ed0b6ffd55932a04b23df812d77d282859f1a3e6f35218448"
+    },
+    "temurin-jre-21013": {
+      "version": "21.0.13+9",
+      "files": 315,
+      "release_size": 1652,
+      "release_sha256": "4f1df3e1b759c29b84899c354696827a9a43303703f2cefc08d81240c4929eec",
+      "jvm_dll_size": 14003320,
+      "jvm_dll_sha256": "a778dc86bead1b093a557d14aa5b8a26473dfae7cae10b46053a37dfd1ea8e32"
+    }
+  },
   "installer_size_range_bytes": [
     250000000,
     450000000

@@ -29,6 +29,7 @@ import datetime
 import hashlib
 import io
 import json
+import os
 import shutil
 import struct
 import subprocess
@@ -490,15 +491,27 @@ def stage_vlc(cache: Path, inputs: dict, rec: Recorder, patched: Path | None,
     return True
 
 
-def stage_jre(cache: Path, inputs: dict, rec: Recorder) -> None:
-    src = fetch_inputs.ensure("temurin-jre", inputs["temurin-jre"], cache)
+def stage_jre(cache: Path, inputs: dict, rec: Recorder, input_name: str = "temurin-jre") -> None:
+    # A12: the JRE is a switchable frozen input. The default stays
+    # temurin-jre (21.0.12+8, the 0.2.8 baseline); the 0.2.7-era 21.0.13+9
+    # build is available as temurin-jre-21013 and is only staged when this
+    # build names it explicitly. Anything else is refused, so a typo can
+    # never silently change the Java runtime.
+    if input_name != "temurin-jre" and not input_name.startswith("temurin-jre-"):
+        fail(f"refusing JRE input '{input_name}': only temurin-jre* inputs are staged")
+    entry = inputs.get(input_name)
+    if entry is None:
+        known = ", ".join(sorted(k for k in inputs if k.startswith("temurin-jre")))
+        fail(f"unknown JRE input '{input_name}' (known temurin-jre* inputs: {known})")
+    version = entry.get("version", "unknown")
+    src = fetch_inputs.ensure(input_name, entry, cache)
     dest = rec.root / "resources" / "jre"
     with zipfile.ZipFile(src) as zf:
         tops = {PurePosixPath(n).parts[0] for n in zf.namelist() if not n.endswith("/")}
     if len(tops) != 1:
         fail(f"Temurin zip has {len(tops)} top-level entries, expected exactly one")
     n = extract_zip(src, dest, next(iter(tops)) + "/", rec,
-                    "Eclipse Temurin JRE 21.0.12+8 (official, SHA-256 pinned)")
+                    f"Eclipse Temurin JRE {version} (official, SHA-256 pinned)")
     for need in ("bin/java.exe", "bin/server/jvm.dll", "NOTICE", "legal", "release"):
         if not (dest / need).exists():
             fail(f"staged JRE lacks {need}")
@@ -774,6 +787,10 @@ def main(argv: list[str] | None = None) -> int:
         "they are copied into resources/geo/ in the staged tree")
     ap.add_argument("--require-geo", action="store_true", help="fail the staging run when the "
         "GeoLite2 databases are not provided; release builds must set this")
+    ap.add_argument("--jre-input", default=os.environ.get("NEBULAE_JRE_INPUT", "temurin-jre"),
+        help="which frozen temurin-jre* input from the lock file to stage (A12); "
+        "default temurin-jre (21.0.12+8); the 0.2.7-era alternate is temurin-jre-21013 "
+        "and requires the user's approved JRE-switch decision")
     args = ap.parse_args(argv)
 
     warnings: list[str] = []
@@ -795,7 +812,7 @@ def main(argv: list[str] | None = None) -> int:
     patched = stage_vlc(args.cache, inputs, rec, args.patched_vlc, args.patches_dir, require_modified=args.require_patched)
     if not patched:
         warnings.append("stock VLC staged: the Blu-ray menu repairs (M-01..M-03) are INACTIVE in this tree (NOT RELEASE-READY)")
-    stage_jre(args.cache, inputs, rec)
+    stage_jre(args.cache, inputs, rec, args.jre_input)
     stage_transmission(args.cache, inputs, rec, cab_tool)
     stage_tailscale(args.cache, inputs, rec, cab_tool)
     stage_vcredist(args.cache, inputs, rec, cab_tool)
