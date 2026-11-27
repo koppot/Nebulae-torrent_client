@@ -1,0 +1,27 @@
+{
+  "_comment": "Frozen Temurin JRE 21.0.13+9 (BD-J/UHD disc menus). Same Java version on every OS: it is the JRE the published 0.2.7 installer shipped and the one the user approved as the Windows default on 2026-11-26. Sizes and SHA-256 are the GitHub release asset digests of adoptium/temurin21-binaries tag jdk-21.0.13+9, read 2026-11-26 (gh api repos/adoptium/temurin21-binaries/releases/tags/jdk-21.0.13+9). A download that does not match size and SHA-256 is deleted and the script fails.",
+  "version": "21.0.13+9",
+  "release_tag": "jdk-21.0.13%2B9",
+  "inputs": {
+    "windows-x64": {
+      "file": "OpenJDK21U-jre_x64_windows_hotspot_21.0.13_9.zip",
+      "bytes": 49106397,
+      "sha256": "2332c0b4cff6bed722da3567c91d5e47568bcba863fa4945d0a8d6fc76158628"
+    },
+    "linux-x64": {
+      "file": "OpenJDK21U-jre_x64_linux_hotspot_21.0.13_9.tar.gz",
+      "bytes": 52181297,
+      "sha256": "a535a1df9c6284d9618872984e026ae0352d1f7e9e0605425c0e6114f47351dd"
+    },
+    "mac-aarch64": {
+      "file": "OpenJDK21U-jre_aarch64_mac_hotspot_21.0.13_9.tar.gz",
+      "bytes": 47935740,
+      "sha256": "225bab0a09491ef06835488cd942f5d2befa9a0410a2484f0c8bbcf7506ec09a"
+    },
+    "mac-x64": {
+      "file": "OpenJDK21U-jre_x64_mac_hotspot_21.0.13_9.tar.gz",
+      "bytes": 41902098,
+      "sha256": "c909674b1c10c261b9a3fb7e9c0efebd303e33f88a4fe84be7135b5e2d711f89"
+    }
+  }
+}
