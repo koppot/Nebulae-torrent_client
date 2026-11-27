@@ -71,10 +71,26 @@ else {
             git -C $tmp checkout -q FETCH_HEAD
         }
         else {
-            Write-Host "==> Shallow-cloning $($lock.repo) (caller's stored credentials)"
+            Write-Host "==> Shallow-cloning $($lock.repo) (source: caller's stored git credentials)"
             $env:GIT_TERMINAL_PROMPT = "0"
             git clone -q --depth 1 $url $tmp 2>$null
-            if ($LASTEXITCODE -ne 0) { throw "REFUSED: could not clone $($lock.repo) (no stored credentials). Provide GEO_ASSETS_TOKEN or NEBULAE_GEO_ASSETS_DIR." }
+            if ($LASTEXITCODE -ne 0 -and (Get-Command gh -ErrorAction SilentlyContinue)) {
+                # Fall back to the GitHub CLI's stored credentials, passed to
+                # git the same way: via a credential helper, never printed.
+                $ghToken = gh auth token 2>$null
+                if ($LASTEXITCODE -eq 0 -and $ghToken) {
+                    Write-Host "==> Stored git credentials failed; retrying (source: gh CLI credentials)"
+                    $env:GEO_ASSETS_TOKEN = "$ghToken".Trim()
+                    Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+                    New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+                    git -C $tmp init -q
+                    git -C $tmp remote add origin $url
+                    $helper = "!f() { echo username=x-access-token; echo password=$env:GEO_ASSETS_TOKEN; }; f"
+                    git -C $tmp -c "credential.helper=$helper" fetch --depth 1 origin $lock.commit -q
+                    git -C $tmp checkout -q FETCH_HEAD
+                }
+            }
+            if ($LASTEXITCODE -ne 0 -and -not (Test-Path (Join-Path $tmp ".git"))) { throw "REFUSED: could not clone $($lock.repo) (no stored credentials). Provide GEO_ASSETS_TOKEN or NEBULAE_GEO_ASSETS_DIR." }
             if ("$(git -C $tmp rev-parse HEAD)".Trim() -ne $lock.commit) {
                 git -C $tmp fetch --depth 1 origin $lock.commit -q
                 git -C $tmp checkout -q FETCH_HEAD

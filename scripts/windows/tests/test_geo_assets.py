@@ -126,6 +126,35 @@ class TestFetchRefusals(unittest.TestCase):
 
 
 class TestPowerShellTwin(unittest.TestCase):
+    def test_fetch_ps1_refuses_wrong_commit_local_dir(self):
+        pwsh = "/opt/homebrew/bin/pwsh"
+        if not Path(pwsh).is_file():
+            self.skipTest("pwsh not available on this machine")
+        with tempfile.TemporaryDirectory() as td:
+            clone = Path(td) / "clone"
+            subprocess.run(["git", "init", "-q", str(clone)], check=True)
+            (clone / "geo").mkdir()
+            (clone / "geo" / "placeholder.txt").write_text("x")
+            subprocess.run(["git", "-C", str(clone), "add", "-A"], check=True)
+            subprocess.run(["git", "-C", str(clone), "-c", "user.email=t@t",
+                            "-c", "user.name=t", "commit", "-qm", "x"], check=True)
+            script = (
+                f"$env:NEBULAE_GEO_ASSETS_DIR='{clone}';"
+                f"& '{FETCH_PS1}' -GeoDir '{Path(td) / 'out'}'"
+            )
+            r = subprocess.run([pwsh, "-NoProfile", "-Command", script],
+                               capture_output=True, text=True)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("pins", r.stdout + r.stderr)
+
+    def test_fetch_ps1_never_prints_credentials(self):
+        # Static check: the script must not echo the token variable or a
+        # bearer/credential value anywhere in its output paths.
+        text = FETCH_PS1.read_text()
+        self.assertNotIn("Write-Host $env:GEO_ASSETS_TOKEN", text)
+        self.assertNotIn("Write-Output $env:GEO_ASSETS_TOKEN", text)
+        self.assertNotIn("Write-Host $ghToken", text)
+
     def test_fetch_ps1_parses(self):
         pwsh = "/opt/homebrew/bin/pwsh"
         if not Path(pwsh).is_file():
