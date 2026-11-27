@@ -4,6 +4,11 @@ make-dmg-background.py
 Produces ~/Downloads/dmg-background.png  (660x400)
        ~/Downloads/dmg-background@2x.png (1320x800)
 for the Nebulae macOS installer window.
+
+Requires Pillow (pip install pillow). The committed assets in
+assets/dmg/ were generated from the original artwork; if that file is
+unavailable the script falls back to drawing its own dark glow
+background so it always produces a valid, zone-safe pair.
 """
 
 import hashlib
@@ -14,9 +19,13 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-ART_SRC   = "/Users/dev/.gemini/antigravity/brain/0c27f4b1-e2f2-4b96-b87b-1f7954bb2320/nebula_art_1795808378943.jpg"
-OUT_2X    = Path.home() / "Downloads" / "dmg-background@2x.png"
-OUT_1X    = Path.home() / "Downloads" / "dmg-background.png"
+ART_SRC   = os.environ.get(
+    "NEBULAE_DMG_ART",
+    "/Users/dev/.gemini/antigravity/brain/0c27f4b1-e2f2-4b96-b87b-1f7954bb2320/nebula_art_1795808378943.jpg",
+)
+_OUT_DIR  = Path(sys.argv[1]) if len(sys.argv) > 1 else Path.home() / "Downloads"
+OUT_2X    = _OUT_DIR / "dmg-background@2x.png"
+OUT_1X    = _OUT_DIR / "dmg-background.png"
 FONT_DIR  = Path("/Users/dev/Library/Fonts")
 SYS_FONTS = Path("/System/Library/Fonts")
 
@@ -33,23 +42,32 @@ except ImportError:
     sys.exit("Pillow not found — run this inside the nebula venv.")
 
 # ---------------------------------------------------------------------------
-# Step 1 – Load and resize artwork to 1320x800
+# Step 1 – Load artwork, or fall back to a self-drawn dark glow
 # ---------------------------------------------------------------------------
-print("[1] Loading artwork …")
-art = Image.open(ART_SRC).convert("RGB")
-art = art.resize((W, H), Image.LANCZOS)
-print(f"    Art size after resize: {art.size}")
+if os.path.exists(ART_SRC):
+    print("[1] Loading artwork …")
+    art = Image.open(ART_SRC).convert("RGB")
+    art = art.resize((W, H), Image.LANCZOS)
+    print(f"    Art size after resize: {art.size}")
 
-# ---------------------------------------------------------------------------
-# Step 2 – Darken to keep background around #141414–#1c1c1c
-#           Blend 60 % toward solid #141414
-# ---------------------------------------------------------------------------
-print("[2] Darkening art …")
-dark_base = Image.new("RGB", (W, H), (20, 20, 20))   # #141414
-art_dark  = Image.blend(art, dark_base, alpha=0.72)   # 72 % toward dark
-
-# Optional: apply a very gentle Gaussian blur to soften any JPEG artefacts
-art_dark = art_dark.filter(ImageFilter.GaussianBlur(radius=1.5))
+    print("[2] Darkening art …")
+    dark_base = Image.new("RGB", (W, H), (20, 20, 20))   # #141414
+    art_dark  = Image.blend(art, dark_base, alpha=0.72)   # 72 % toward dark
+    art_dark  = art_dark.filter(ImageFilter.GaussianBlur(radius=1.5))
+else:
+    print(f"[1] Artwork not found at {ART_SRC} — drawing a self-made glow …")
+    art_dark = Image.new("RGB", (W, H), (20, 20, 20))    # #141414 base
+    glow = Image.new("L", (W, H), 0)
+    gdraw = ImageDraw.Draw(glow)
+    cx, cy = W // 2, int(H * 0.45)
+    for r in range(560, 40, -8):
+        shade = int(46 * (1 - r / 560.0)) + 6
+        gdraw.ellipse([cx - r, cy - int(r * 0.72), cx + r, cy + int(r * 0.72)],
+                      fill=shade)
+    glow = glow.filter(ImageFilter.GaussianBlur(radius=120))
+    red_tint = Image.new("RGB", (W, H), (120, 24, 32))   # dim brand-red glow
+    art_dark = Image.composite(red_tint, art_dark, glow)
+    print(f"    Self-drawn glow canvas: {art_dark.size}")
 
 # Work on a copy from here so we never alter the snapshot reference
 canvas = art_dark.copy()
