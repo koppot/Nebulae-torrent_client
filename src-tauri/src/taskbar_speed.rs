@@ -28,6 +28,8 @@ pub(crate) struct BandLayout {
     /// Reserved pixel width for the speed-text block.
     pub text_reserve_w: i32,
     pub font_px: i32,
+    /// Estimated rendered line height (~1.35x em) used to stack the two lines.
+    pub line_h: i32,
     pub up_y: i32,
     pub down_y: i32,
     pub pill_pad_x: i32,
@@ -55,9 +57,18 @@ pub(crate) fn band_layout(tray_h: i32) -> BandLayout {
     let width = text_reserve_w + pill_pad_x * 2;
     let text_x = pill_pad_x;
 
-    let font_px = (13.0 * dpi_scale).round() as i32;
-    let up_y = (tray_h / 2) - (14.0 * dpi_scale).round() as i32;
-    let down_y = (tray_h / 2) + (1.0 * dpi_scale).round() as i32;
+    // C17 (D13): derive the font and the stacked two-line block from the tray
+    // height so the text is vertically centered at any taskbar thickness
+    // (Windows 10 default 40px, small-buttons ~32px, high-DPI). Segoe UI line
+    // height is ~1.35x the em size. The font shrinks to fit half-height lines
+    // on thin taskbars instead of overflowing.
+    let line_ratio = 1.35f32;
+    let max_font = ((tray_h as f32 / 2.0) / line_ratio).floor() as i32;
+    let font_px = (((13.0 * dpi_scale).round() as i32).max(9)).min(max_font.max(9));
+    let line_h = (font_px as f32 * line_ratio).round() as i32;
+    let block_h = line_h * 2;
+    let up_y = ((tray_h - block_h) / 2).max(0);
+    let down_y = up_y + line_h;
 
     BandLayout {
         width,
@@ -65,6 +76,7 @@ pub(crate) fn band_layout(tray_h: i32) -> BandLayout {
         text_x,
         text_reserve_w,
         font_px,
+        line_h,
         up_y,
         down_y,
         pill_pad_x,
@@ -116,10 +128,10 @@ mod windows_impl {
     };
     use windows::Win32::Graphics::Gdi::{
         CreateDIBSection, CreateFontW, DeleteDC, DeleteObject, GdiFlush, GetDC, GetMonitorInfoW,
-        MonitorFromWindow, ReleaseDC, SelectObject, SetBkMode, SetTextColor, TextOutW,
-        AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION,
+        GetTextMetricsW, MonitorFromWindow, ReleaseDC, SelectObject, SetBkMode, SetTextColor,
+        TextOutW, AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION,
         CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DIB_RGB_COLORS, MONITORINFO,
-        MONITOR_DEFAULTTONULL, OUT_DEFAULT_PRECIS, TRANSPARENT,
+        MONITOR_DEFAULTTONULL, OUT_DEFAULT_PRECIS, TEXTMETRICW, TRANSPARENT,
     };
     use windows::Win32::System::Com::{CoInitializeEx, IDispatch, COINIT_APARTMENTTHREADED};
     use windows::Win32::System::Variant::VARIANT;
@@ -759,6 +771,23 @@ mod windows_impl {
 
         let text_x = layout.text_x;
 
+        // C17 (D13): center the stacked lines on the ACTUAL font metrics of the
+        // selected font, so the block is vertically centered whatever font GDI
+        // resolved (Segoe UI at any DPI, or a fallback). layout.up_y/down_y are
+        // the estimate; this measured centering wins when metrics are available.
+        let (up_y, down_y) = {
+            let mut tm = TEXTMETRICW::default();
+            let measured_line = if GetTextMetricsW(mem_dc, &mut tm).as_bool() && tm.tmHeight > 0 {
+                tm.tmHeight
+            } else {
+                layout.line_h
+            };
+            let measured_line = measured_line.max(layout.font_px);
+            let block = measured_line * 2;
+            let top = ((height - block) / 2).max(0);
+            (top, top + measured_line)
+        };
+
         // Upper line: Upload rate in vibrant Warm Amber/Orange (BGR 0x0032AAFF = RGB 255, 170, 50)
         let _ = SetTextColor(mem_dc, COLORREF(0x0032AAFF));
         let up_wide: Vec<u16> = up_line.encode_utf16().collect();
@@ -1022,5 +1051,43 @@ mod layout_tests {
             assert!(l.down_y > l.up_y);
             assert!(l.down_y + l.font_px <= l.height + 2);
         }
+    }
+
+    #[test]
+    fn c17_stacked_block_is_vertically_centered() {
+        // C17 (D13): the two-line text block must be centered in the band at
+        // every taskbar thickness, not parked at fixed offsets from the top
+        // (the old 40px-only assumption behind the user's misalignment report).
+        for tray_h in [30, 32, 34, 36, 40, 48, 60, 80, 96] {
+            let l = band_layout(tray_h);
+            let top_gap = l.up_y;
+            let bottom_gap = tray_h - (l.down_y + l.line_h);
+            assert!(
+                (top_gap - bottom_gap).abs() <= 2,
+                "tray_h={tray_h}: top_gap={top_gap}, bottom_gap={bottom_gap}"
+            );
+            // The whole block fits inside the band.
+            assert!(top_gap >= 0 && bottom_gap >= 0, "tray_h={tray_h}");
+            // Lines are stacked with no gap larger than one line.
+            assert_eq!(l.down_y - l.up_y, l.line_h, "tray_h={tray_h}");
+        }
+    }
+
+    #[test]
+    fn c17_font_shrinks_to_fit_thin_taskbars() {
+        // Small taskbar buttons (~32px at 1x): a 13px font no longer fits two
+        // stacked lines; the font must shrink so the block fits the height.
+        for tray_h in [30, 32, 34, 36] {
+            let l = band_layout(tray_h);
+            assert!(
+                l.up_y + 2 * l.line_h <= tray_h,
+                "tray_h={tray_h}: block overflows (font={}, line_h={})",
+                l.font_px,
+                l.line_h
+            );
+            assert!(l.font_px >= 9, "tray_h={tray_h}: font collapsed below 9px");
+        }
+        // Standard 40px taskbar keeps the 13px font.
+        assert_eq!(band_layout(40).font_px, 13);
     }
 }
