@@ -234,9 +234,14 @@ export default function PlayerOverlay() {
   const [castActionLoading, setCastActionLoading] = useState(false);
   // Disc restream (Part 6): the main feature streamed over HTTP for
   // receivers that cannot decode authored disc structures.
-  const [discRestream, setDiscRestream] = useState<{ url: string; port: number; title_index: number; duration_ms: number } | null>(null);
+  const [discRestream, setDiscRestream] = useState<{ url: string; port: number; title_index: number; duration_ms: number; kind?: 'hls' | 'ts' | 'renderer' } | null>(null);
   const [discRestreamError, setDiscRestreamError] = useState<string | null>(null);
   const [discRestreamLoading, setDiscRestreamLoading] = useState(false);
+  // How the running disc stream is being consumed: a plain URL for a player
+  // on the receiver, an experimental AirPlay send, or an experimental
+  // libvlc renderer cast (Chromecast/DLNA). Decides what "Stop" calls.
+  const [discCastChannel, setDiscCastChannel] = useState<'url' | 'airplay' | 'renderer' | null>(null);
+  const [discCastLoading, setDiscCastLoading] = useState<string | null>(null);
   const discoveryTimerRef = useRef<number | null>(null);
   const airplayAnchorRef = useRef<HTMLDivElement | null>(null);
 
@@ -419,8 +424,9 @@ export default function PlayerOverlay() {
     setDiscRestreamLoading(true);
     setDiscRestreamError(null);
     try {
-      const info = await invoke<{ url: string; port: number; title_index: number; duration_ms: number }>('player_disc_restream_start');
+      const info = await invoke<{ url: string; port: number; title_index: number; duration_ms: number; kind?: 'hls' | 'ts' | 'renderer' }>('player_disc_restream_start');
       setDiscRestream(info);
+      setDiscCastChannel('url');
     } catch (e) {
       setDiscRestreamError(String(e));
     } finally {
@@ -428,11 +434,52 @@ export default function PlayerOverlay() {
     }
   }, []);
 
-  const stopDiscRestream = useCallback(async () => {
-    await invoke('player_disc_restream_stop').catch(() => {});
-    setDiscRestream(null);
+  // EXPERIMENTAL: cast the disc main feature through a libvlc renderer
+  // (Chromecast/DLNA). Errors are shown as they come from the backend.
+  const startCastRenderer = useCallback(async (device: DiscoveredDevice) => {
+    setDiscCastLoading(device.id);
     setDiscRestreamError(null);
+    try {
+      const info = await invoke<{ url: string; port: number; title_index: number; duration_ms: number; kind?: 'hls' | 'ts' | 'renderer' }>('player_cast_renderer_start', { deviceId: device.id });
+      setDiscRestream(info);
+      setDiscCastChannel('renderer');
+    } catch (e) {
+      setDiscRestreamError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDiscCastLoading(null);
+    }
   }, []);
+
+  // EXPERIMENTAL: send the disc main feature to an AirPlay receiver as an
+  // HLS URL. Waits until the stream has produced its first segments.
+  const startAirplayDisc = useCallback(async () => {
+    setDiscCastLoading('airplay');
+    setDiscRestreamError(null);
+    try {
+      const info = await invoke<{ url: string; port: number; title_index: number; duration_ms: number; kind?: 'hls' | 'ts' | 'renderer' }>('player_airplay_disc_start');
+      setDiscRestream(info);
+      setDiscCastChannel('airplay');
+    } catch (e) {
+      setDiscRestreamError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDiscCastLoading(null);
+    }
+  }, []);
+
+  const stopDiscRestream = useCallback(async () => {
+    if (discCastChannel === 'renderer') {
+      await invoke('player_cast_renderer_stop').catch(() => {});
+    } else {
+      await invoke('player_disc_restream_stop').catch(() => {});
+      if (discCastChannel === 'airplay') {
+        // Tear the receiver session down and resume local playback.
+        await invoke('player_device_return_to_local').catch(() => {});
+      }
+    }
+    setDiscRestream(null);
+    setDiscCastChannel(null);
+    setDiscRestreamError(null);
+  }, [discCastChannel]);
 
   const refreshDeviceList = useCallback(async () => {
     try {
@@ -449,10 +496,9 @@ export default function PlayerOverlay() {
     setPreflight(null);
     setPreflightError(null);
 
-    if (player.isDisc) {
-      return;
-    }
-
+    // Discs need discovery too: the experimental cast buttons pick a
+    // receiver from this list (the plain URL flow does not, but listing
+    // receivers costs nothing and tells the user what is reachable).
     setIsDiscovering(true);
     try {
       await invoke('player_device_discovery_start');
@@ -467,7 +513,7 @@ export default function PlayerOverlay() {
       setPreflightError(e instanceof Error ? e.message : String(e));
       setIsDiscovering(false);
     }
-  }, [player.isDisc, refreshDeviceList]);
+  }, [refreshDeviceList]);
 
   const handleSelectDevice = useCallback(async (device: DiscoveredDevice) => {
     setSelectedDevice(device);
@@ -2486,25 +2532,46 @@ export default function PlayerOverlay() {
                 {discRestream ? (
                   <div className="space-y-2">
                     <div className="text-xs text-white/90 space-y-1">
-                      <div className="font-semibold text-white">Main-feature stream running</div>
-                      <div>
-                        Open this URL in a player on the receiver device (for example VLC). The main feature is transcoded to H.264/AAC; menus are not available remotely.
+                      {discCastChannel === 'renderer' ? (
+                        <>
+                          <div className="font-semibold text-white">Casting (experimental) to the receiver</div>
+                          <div>
+                            libvlc is transcoding the main feature and sending it to the receiver. Menus are not available remotely; local playback is paused.
+                          </div>
+                        </>
+                      ) : discCastChannel === 'airplay' ? (
+                        <>
+                          <div className="font-semibold text-white">Sending (experimental) to the AirPlay receiver</div>
+                          <div>
+                            The main feature is streamed to the receiver as HLS. Menus are not available remotely; local playback is paused.
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div className="font-semibold text-white">Main-feature stream running</div>
+                          <div>
+                            Open this URL in a player on the receiver device (for example VLC). The main feature is transcoded to H.264/AAC; menus are not available remotely.
+                          </div>
+                        </>
+                      )}
+                      {discRestreamError ? <div className="text-red-400">{discRestreamError}</div> : null}
+                    </div>
+                    {discRestream.url ? (
+                      <div className="flex items-center gap-2">
+                        <code className="flex-1 text-xs bg-black/40 border border-[#333333] rounded px-2 py-1 break-all text-white/80">
+                          {discRestream.url}
+                        </code>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void navigator.clipboard?.writeText(discRestream.url).catch(() => {});
+                          }}
+                          className="px-3 py-1.5 text-xs rounded bg-white/15 text-white hover:bg-white/20 transition"
+                        >
+                          Copy
+                        </button>
                       </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <code className="flex-1 text-xs bg-black/40 border border-[#333333] rounded px-2 py-1 break-all text-white/80">
-                        {discRestream.url}
-                      </code>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          void navigator.clipboard?.writeText(discRestream.url).catch(() => {});
-                        }}
-                        className="px-3 py-1.5 text-xs rounded bg-white/15 text-white hover:bg-white/20 transition"
-                      >
-                        Copy
-                      </button>
-                    </div>
+                    ) : null}
                     <div className="flex justify-between pt-1">
                       <button
                         type="button"
@@ -2515,7 +2582,10 @@ export default function PlayerOverlay() {
                       </button>
                       <button
                         type="button"
-                        onClick={() => setShowDevicePicker(false)}
+                        onClick={() => {
+                          setShowDevicePicker(false);
+                          stopDiscovery();
+                        }}
                         className="px-3 py-1.5 text-xs rounded bg-white/15 text-white hover:bg-white/20 transition"
                       >
                         Close
@@ -2529,17 +2599,74 @@ export default function PlayerOverlay() {
                       <div className="text-xs text-white/90 space-y-1">
                         <div className="font-semibold text-yellow-400">Disc playback streams the main feature</div>
                         <div>
-                          Receiver devices cannot decode authored DVD/Blu-ray menus. Nebulae streams the main feature title, transcoded to H.264/AAC over your local network, for you to open in a player on the device (for example VLC). AirPlay and Chromecast receivers cannot play this stream directly.
+                          Receiver devices cannot decode authored DVD/Blu-ray menus, so Nebulae streams the main feature title, transcoded to H.264/AAC. Send it to a receiver with the experimental buttons below, or copy the URL into a player on the device (for example VLC). Casting to discs is experimental: the receiver may refuse or stall; errors are shown here.
                         </div>
                         {discRestreamError ? (
                           <div className="text-red-400">{discRestreamError}</div>
                         ) : null}
                       </div>
                     </div>
+
+                    {/* Experimental receiver cast (Chromecast/DLNA via libvlc,
+                        AirPlay via HLS). Discovered receivers are listed so the
+                        buttons have a target; errors surface verbatim. */}
+                    <div className="space-y-2">
+                      <div className="text-[11px] text-white/50">Receivers found on your network {isDiscovering ? '(searching…)' : ''}:</div>
+                      {discoveredDevices.length === 0 ? (
+                        <div className="p-3 text-center text-[11px] text-white/50 border border-[#262626] rounded-md bg-[#141414]">
+                          {isDiscovering ? 'Searching local network for receivers…' : 'No receivers found. Make sure the receiver is powered on and on the same network, then close and reopen this panel.'}
+                        </div>
+                      ) : (
+                        <div className="max-h-40 overflow-y-auto space-y-2">
+                          {discoveredDevices.map((dev) => (
+                            <div key={dev.id} className="flex items-center justify-between p-2.5 rounded-lg border border-[#2b2b2b] bg-[#1a1a1a]">
+                              <div className="min-w-0">
+                                <div className="text-xs font-semibold text-white truncate">{dev.name}</div>
+                                <div className="text-[10px] text-white/50 capitalize">
+                                  {dev.renderer_type === 'airplay' ? 'AirPlay' : (dev.renderer_type || 'Google Cast')}
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                disabled={discCastLoading !== null}
+                                onClick={() => void startCastRenderer(dev)}
+                                className="ml-2 shrink-0 px-3 py-1.5 text-xs rounded bg-white/15 text-white hover:bg-white/20 transition disabled:opacity-50"
+                              >
+                                {discCastLoading === dev.id ? 'Starting…' : 'Cast (experimental)'}
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <div className="flex items-center justify-between pt-1">
+                        <button
+                          type="button"
+                          disabled={discCastLoading !== null}
+                          onClick={() => void startAirplayDisc()}
+                          className="px-3 py-1.5 text-xs rounded bg-white/15 text-white hover:bg-white/20 transition disabled:opacity-50"
+                        >
+                          {discCastLoading === 'airplay' ? 'Sending…' : 'Send to AirPlay receiver (experimental)'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsDiscovering(true);
+                            void refreshDeviceList();
+                          }}
+                          className="text-[11px] text-white/60 hover:text-white transition"
+                        >
+                          Rescan
+                        </button>
+                      </div>
+                    </div>
+
                     <div className="flex justify-end gap-2 pt-2">
                       <button
                         type="button"
-                        onClick={() => setShowDevicePicker(false)}
+                        onClick={() => {
+                          setShowDevicePicker(false);
+                          stopDiscovery();
+                        }}
                         className="px-3 py-1.5 text-xs rounded bg-white/15 text-white hover:bg-white/20 transition"
                       >
                         Close
@@ -2550,7 +2677,7 @@ export default function PlayerOverlay() {
                         onClick={() => void startDiscRestream()}
                         className="px-3 py-1.5 text-xs rounded bg-white/15 text-white hover:bg-white/20 transition disabled:opacity-50"
                       >
-                        {discRestreamLoading ? 'Starting…' : 'Start main-feature stream'}
+                        {discRestreamLoading ? 'Starting…' : 'Start main-feature stream (copy URL)'}
                       </button>
                     </div>
                   </div>
