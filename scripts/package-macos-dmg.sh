@@ -29,9 +29,9 @@
 #                  (window size / icon positions from tauri.conf.json) should
 #                  be carried over; optional
 #   --background   background PNG for the DMG window; default:
-#                  <repo>/assets/dmg-background.png (created at build time if
-#                  missing); placed in .background/ on the volume so Finder
-#                  renders it as the mounted window backdrop.
+#                  <repo>/assets/dmg/dmg-background.png (with its 2x twin
+#                  dmg-background@2x.png); placed in .background/ on the
+#                  volume so Finder renders it as the mounted window backdrop.
 
 set -euo pipefail
 
@@ -45,7 +45,8 @@ APP_DIR=""
 OUTPUT=""
 ICON_FILE="$REPO_ROOT/src-tauri/icons/icon.icns"
 LAYOUT_DMG=""
-BACKGROUND_FILE="$REPO_ROOT/assets/dmg-background.png"
+BACKGROUND_FILE="$REPO_ROOT/assets/dmg/dmg-background.png"
+BACKGROUND_2X_FILE="$REPO_ROOT/assets/dmg/dmg-background@2x.png"
 README_FILE="$REPO_ROOT/docs/macos-install-readme.txt"
 
 while [[ $# -gt 0 ]]; do
@@ -85,6 +86,24 @@ PNG_MAGIC="$(head -c 4 "$BACKGROUND_FILE" | od -An -tx1 | tr -d ' \n')"
 [[ "$PNG_MAGIC" == "89504e47" ]] ||
     fail "Not a valid PNG file: $BACKGROUND_FILE"
 
+# The 2x twin must exist and be exactly double the 1x dimensions (660x400).
+if [[ ! -f "$BACKGROUND_2X_FILE" || ! -r "$BACKGROUND_2X_FILE" ]]; then
+    fail "Background 2x image missing or unreadable: $BACKGROUND_2X_FILE"
+fi
+BACKGROUND_2X_FILE="$(cd "$(dirname "$BACKGROUND_2X_FILE")" && printf '%s/%s\n' "$PWD" "$(basename "$BACKGROUND_2X_FILE")")"
+PNG_MAGIC_2X="$(head -c 4 "$BACKGROUND_2X_FILE" | od -An -tx1 | tr -d ' \n')"
+[[ "$PNG_MAGIC_2X" == "89504e47" ]] ||
+    fail "Not a valid PNG file: $BACKGROUND_2X_FILE"
+check_png_size() { # <png> <want-w>x<want-h> <label>
+    local dims
+    dims="$(sips -g pixelWidth -g pixelHeight "$1" 2>/dev/null |
+        awk '/pixelWidth/{w=$2}/pixelHeight/{h=$2}END{print w"x"h}')"
+    [[ "$dims" == "$2" ]] ||
+        fail "$3 has size ${dims:-unknown}, expected $2: $1"
+}
+check_png_size "$BACKGROUND_FILE" "660x400" "DMG background 1x"
+check_png_size "$BACKGROUND_2X_FILE" "1320x800" "DMG background 2x"
+
 # --- Temporary state with cleanup traps --------------------------------------
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/nebulae-dmg.XXXXXX")"
 STAGING_DIR="$WORK_DIR/staging"
@@ -120,6 +139,7 @@ cp "$README_FILE" "$STAGING_DIR/READ ME FIRST.txt"
 # --- Background image: Finder renders it as the mounted window backdrop ---
 mkdir -p "$STAGING_DIR/.background"
 cp "$BACKGROUND_FILE" "$STAGING_DIR/.background/background.png"
+cp "$BACKGROUND_2X_FILE" "$STAGING_DIR/.background/background@2x.png"
 
 # Carry over the bundler's .DS_Store so the DMG window layout configured in
 # tauri.conf.json (window size, app / Applications positions) survives.
@@ -196,6 +216,10 @@ cmp -s "$README_FILE" "$verify_mnt/READ ME FIRST.txt" ||
     fail ".background/background.png missing from the final DMG"
 cmp -s "$BACKGROUND_FILE" "$verify_mnt/.background/background.png" ||
     fail ".background/background.png differs from $BACKGROUND_FILE"
+[[ -f "$verify_mnt/.background/background@2x.png" ]] ||
+    fail ".background/background@2x.png missing from the final DMG"
+cmp -s "$BACKGROUND_2X_FILE" "$verify_mnt/.background/background@2x.png" ||
+    fail ".background/background@2x.png differs from $BACKGROUND_2X_FILE"
 APPLEDOUBLE=$(find "$verify_mnt" -name '._*' -type f | wc -l | tr -d ' ')
 [[ "$APPLEDOUBLE" -eq 0 ]] ||
     fail "$APPLEDOUBLE AppleDouble (._*) files in the final DMG payload"
@@ -204,7 +228,7 @@ hdiutil detach "$verify_mnt" || fail "Could not detach after verification"
 verify_mnt=""
 MNT_CLEANED=1
 log "DMG volume icon verified (embedded + flag set)."
-log "DMG ROOT GATE OK: Nebulae.app, Applications, READ ME FIRST.txt (hash verified), .background/background.png, .VolumeIcon.icns; no AppleDouble files."
+log "DMG ROOT GATE OK: Nebulae.app, Applications, READ ME FIRST.txt (hash verified), .background/background.png + background@2x.png (hash verified), .VolumeIcon.icns; no AppleDouble files."
 
 # --- Outer .dmg FILE icon (Finder metadata; see limitation above) --------------
 log "Setting custom icon on final DMG file..."

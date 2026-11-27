@@ -1,28 +1,24 @@
-READ ME FIRST — installing Nebulae on macOS
-============================================
+INSTALLING NEBULAE ON MAC
 
-Thank you for installing Nebulae. macOS Gatekeeper checks apps that are not
-downloaded from the App Store. Three short steps:
+You may see a warning that Apple cannot check the app for malicious
+software, or that the app cannot be opened. This is expected: this build
+is not notarized.
 
-Step 1: Drag Nebulae to Applications
-   Drag the Nebulae icon onto the Applications folder icon in this window.
+1. Open the DMG file.
+2. Drag Nebulae.app to the Applications folder.
+3. Eject the DMG (Finder sidebar, Eject).
+4. Open Applications and double-click Nebulae.
+5. If macOS says the app cannot be opened:
+   - macOS 15 (Sequoia) or later: click Done, then open System Settings,
+     Privacy and Security, scroll down to the Security section, and click
+     Open Anyway.
+   - macOS 14 (Sonoma) or earlier: control-click (right-click) Nebulae.app
+     in Applications and choose Open, then Open in the dialog.
+6. If macOS blocks the app because it was downloaded from the internet,
+   run this in Terminal and try again:
+   xattr -dr com.apple.quarantine /Applications/Nebulae.app
+7. If macOS asks about Nebulae reading removable volumes (external
+   drives), click Allow.
 
-Step 2: Open it, click Done on the Apple warning
-   Open Nebulae from Applications. macOS shows a warning that the app cannot
-   be checked for malicious software. Click "Done" (do NOT click
-   "Move to Trash").
-
-Step 3: System Settings > Privacy & Security > Open Anyway
-   Open System Settings, go to Privacy & Security, find the note about
-   Nebulae being blocked, and click "Open Anyway". Nebulae opens.
-
-Nebulae opens normally from now on; steps 2 and 3 are only needed the first
-time.
-
-Notes
------
-* If the Open Anyway button is missing, open Nebulae once more; macOS only
-  shows the entry after a blocked launch attempt.
-* Nothing is installed outside the Applications folder. To remove Nebulae,
-  drag it from Applications to the Trash; your data stays in
-  ~/Library/Application Support/Nebulae.
+Release SHA-256 checksums are published on the release page at
+nebulae.asiandvdclub.org.
