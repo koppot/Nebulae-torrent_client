@@ -112,6 +112,15 @@ if [ "${NEBULAE_STAGING_ONLY:-}" = "1" ]; then
     exit 0
 fi
 
+# --- 6b. Clean-tree re-check after staging (the 2026-11-27 -dirty incident) --
+# Staging writes only into gitignored paths; a tracked file modified here is a
+# staging-script bug and would make the binary report "...-dirty".
+if [ -n "$(git status --porcelain)" ]; then
+    echo "REFUSED: the worktree is dirty after staging (staging must never modify tracked files):" >&2
+    git status --porcelain >&2
+    exit 1
+fi
+
 BUILD_ARGS=(--target "$TARGET")
 if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ] && [ -z "${TAURI_SIGNING_PRIVATE_KEY_PATH:-}" ]; then
     echo "==> NOTE: no Tauri signing key in the environment: UNSIGNED TEST CANDIDATE (updater artifacts off, tauri.conf.json unmodified)."
@@ -121,6 +130,32 @@ pnpm tauri build "${BUILD_ARGS[@]}"
 
 APP_DIR=$(find "src-tauri/target/$TARGET" -name "Nebulae.app" -type d | head -n 1)
 [ -n "$APP_DIR" ] || { echo "FAIL: Nebulae.app was not produced" >&2; exit 1; }
+
+# --- 6c. The built app must report a CLEAN source (Part 2 gate) --------------
+# build.rs stamps NEBULAE_BUILD_ID="<sha>-clean|dirty" from git status at
+# compile time. A -dirty binary is never delivered; it is quarantined.
+BUILD_ID_IN_BIN=$(strings -a "$APP_DIR/Contents/MacOS/nebulae" | grep -m1 -o '[0-9a-f]\{40\}-\(clean\|dirty\)' || true)
+case "$BUILD_ID_IN_BIN" in
+    *-clean) echo "==> Built provenance: $BUILD_ID_IN_BIN" ;;
+    *-dirty)
+        QUAR="$OUT/quarantine-$(date +%Y%m%d-%H%M%S)"
+        mkdir -p "$QUAR"
+        mv "$APP_DIR" "$QUAR/" 2>/dev/null || true
+        echo "FAIL: the built app reports build_id '$BUILD_ID_IN_BIN' (-dirty). Quarantined in $QUAR." >&2
+        echo "      A dirty build is never delivered. Fix the staging scripts and rebuild." >&2
+        exit 1
+        ;;
+    *)
+        echo "FAIL: could not read the embedded build_id from the built binary" >&2
+        exit 1
+        ;;
+esac
+# The worktree must still be clean after the build.
+if [ -n "$(git status --porcelain)" ]; then
+    echo "REFUSED: the worktree is dirty after the build:" >&2
+    git status --porcelain >&2
+    exit 1
+fi
 # release.yml: a failed verify stops the arm64 leg; the x86_64 leg runs on an
 # arm64 machine with helpers built for it, so its findings are reported only.
 if ! ./scripts/verify-macos-app.sh "$APP_DIR"; then
@@ -146,6 +181,13 @@ hdiutil attach -readonly -nobrowse -noverify -mountpoint "$MNT" "$OUT/$DMG_NAME"
 trap 'hdiutil detach "$MNT" >/dev/null 2>&1 || true; rmdir "$MNT" 2>/dev/null || true' EXIT
 MOUNTED_APP=$(find "$MNT" -maxdepth 2 -name "Nebulae.app" -type d | head -n 1)
 [ -n "$MOUNTED_APP" ] || { echo "FAIL: no Nebulae.app inside the mounted dmg" >&2; exit 1; }
+# The DELIVERED image must also carry the clean provenance.
+MNT_BUILD_ID=$(strings -a "$MOUNTED_APP/Contents/MacOS/nebulae" | grep -m1 -o '[0-9a-f]\{40\}-\(clean\|dirty\)' || true)
+case "$MNT_BUILD_ID" in
+    *-clean) echo "==> Delivered app provenance: $MNT_BUILD_ID" ;;
+    *) echo "FAIL: the app inside the final dmg reports build_id '$MNT_BUILD_ID' (expected the approved SHA with -clean)" >&2
+       [ "$TARGET" != "aarch64-apple-darwin" ] || exit 1 ;;
+esac
 ./scripts/verify-macos-app.sh "$MOUNTED_APP" || { [ "$TARGET" != "aarch64-apple-darwin" ] || { echo "FAIL: verify-macos-app.sh on the mounted dmg" >&2; exit 1; }; }
 echo "==> Mounted dmg check passed (read-only; nothing installed)."
 

@@ -92,3 +92,9 @@ jrex/
 *.sha256
 candidate-source.txt
 WINDOWS-SIGNING-STATUS.txt
+
+# Generated staging manifests and build-time dirs (never tracked; they would make the
+# build_id -dirty — see the 2026-11-27 -dirty incident).
+src-tauri/resources/build-manifest.json
+src-tauri/macos-deps-11/
+task1-manifest*.csv

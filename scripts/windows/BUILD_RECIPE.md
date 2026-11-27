@@ -73,6 +73,18 @@ Tauri may download the WebView2 offline installer on this step (offlineInstaller
 If the installer step stalls, apply the stall rule in BUILD_FAILURE_MODES.md (capture, do not retry).
 The installer is written to src-tauri\target\release\bundle\nsis\.
 
+## 6b. Clean-provenance gate (mandatory before delivery)
+```powershell
+powershell -File scripts\windows\verify-clean-build.ps1 -BuiltExe "$Src\src-tauri\target\release\nebulae.exe"
+```
+Required exit code 0. The gate reads the build_id that build.rs stamped into
+the binary (`<sha>-clean` or `<sha>-dirty` from `git status` at compile time).
+A `-dirty` binary is NEVER delivered — quarantine it and fix the staging
+script that modified a tracked file. If it reports a dirty worktree after the
+build, that is the same failure; only gitignored paths may change
+(`task1-manifest*.csv` is gitignored, so the Task 1 manifest CSV may stay in
+the checkout).
+
 ## 7. Verify by extraction (installs nothing)
 ```powershell
 $Installer = (Get-ChildItem "$Src\src-tauri\target\release\bundle\nsis\*.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName

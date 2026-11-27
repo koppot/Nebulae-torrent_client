@@ -51,7 +51,19 @@ echo "==> Compile gates passed (cargo check, cargo clippy, tsc --noEmit)."
 
 pnpm install --frozen-lockfile
 ./scripts/bundle-linux-transmission.sh
+
+# Clean-tree re-check after staging (staging must never modify tracked files).
+[ -z "$(git status --porcelain)" ] || { echo "REFUSED: the worktree is dirty after staging:" >&2; git status --porcelain >&2; exit 1; }
+
 pnpm tauri build --bundles deb,rpm
+
+# The built binary must report a CLEAN source (build.rs stamps -clean/-dirty).
+BUILD_ID_IN_BIN=$(strings -a src-tauri/target/release/nebulae 2>/dev/null | grep -m1 -o '[0-9a-f]\{40\}-\(clean\|dirty\)' || true)
+case "$BUILD_ID_IN_BIN" in
+    *-clean) echo "==> Built provenance: $BUILD_ID_IN_BIN" ;;
+    *) echo "FAIL: the built Linux binary reports build_id '$BUILD_ID_IN_BIN' (expected <sha>-clean); not delivered" >&2; exit 1 ;;
+esac
+[ -z "$(git status --porcelain)" ] || { echo "REFUSED: the worktree is dirty after the build:" >&2; git status --porcelain >&2; exit 1; }
 
 for f in src-tauri/target/release/bundle/deb/*.deb src-tauri/target/release/bundle/rpm/*.rpm; do
     [ -f "$f" ] || continue
