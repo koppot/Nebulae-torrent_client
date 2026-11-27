@@ -1391,14 +1391,20 @@ mod tests {
 
     #[test]
     fn socks_proxy_that_is_not_listening_is_a_proxy_fault() {
-        let addr = {
-            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-            listener.local_addr().unwrap()
-        };
-        match socks5_connect(addr, "100.117.16.0", 443, Duration::from_millis(500)) {
-            Err(SocksFailure::Proxy(msg)) => assert!(msg.starts_with("socks connect:"), "{msg}"),
-            other => panic!("expected a proxy fault, got {other:?}"),
+        // A just-freed ephemeral port can be re-bound by a parallel test
+        // before the connect; retry with a fresh port instead of flaking.
+        let mut last = String::new();
+        for _ in 0..8 {
+            let addr = {
+                let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+                listener.local_addr().unwrap()
+            };
+            match socks5_connect(addr, "100.117.16.0", 443, Duration::from_millis(500)) {
+                Err(SocksFailure::Proxy(msg)) if msg.starts_with("socks connect:") => return,
+                other => last = format!("{other:?}"),
+            }
         }
+        panic!("expected a proxy fault, last result {last}");
     }
 
     #[test]
