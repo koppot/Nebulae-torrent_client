@@ -27,7 +27,7 @@ command -v ffmpeg >/dev/null || { echo "FAIL: ffmpeg not found" >&2; exit 1; }
 case "$SRC" in *://*) MRL="$SRC" ;; *) MRL="file://$SRC" ;; esac
 
 CHAIN=":sout=#transcode{vcodec=h264,vb=2500,venc=x264{profile=high,level=4.0,preset=veryfast,keyint=50,min-keyint=25},acodec=mp4a,ab=192,channels=2,samplerate=44100}:std{access=livehttp{seglen=4,delsegs=false,numsegs=0,index=\"$OUT/vlc-index.m3u8\",index-url=seg-########.ts},mux=ts{use-key-frames},dst=\"$OUT/seg-########.ts\"}"
-"$VLC_BIN" -I dummy --vout none --aout none --no-interact "$MRL" "$CHAIN" :no-dvdnav-menu >"$OUT/vlc.log" 2>&1 &
+"$VLC_BIN" -I dummy --vout none --aout none --no-interact "$MRL" "$CHAIN" :no-dvdnav-menu :no-bluray-menu >"$OUT/vlc.log" 2>&1 &
 PID=$!
 sleep "$SECS"
 kill -INT "$PID"
