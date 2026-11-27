@@ -164,14 +164,19 @@ if ! ./scripts/verify-macos-app.sh "$APP_DIR"; then
     echo "WARNING: verify-macos-app.sh reported findings on the x86_64 leg (reported, not fatal, as in release.yml)"
 fi
 
-# --- 6d. Optional signing (default: unsigned) --------------------------------
-# --sign-identity "<name>" (or env APPLE_SIGNING_IDENTITY) seals the app
-# inside-out with scripts/sign-macos-app.sh, using the identity already in
-# the user's keychain. No identity or secret lives in the repo. The previous
-# delivered candidate was signed with an Apple Development certificate
-# (fingerprint E3A26A990308798F8DE4B7C49A3E27BFEF192623, team 2YJ32CEY87);
-# a PUBLIC release additionally needs a Developer ID certificate and
-# notarization — neither is available here, and this script does neither.
+# --- 6d. Signing: ad-hoc seal by default (release policy, 2026-11-27) --------
+# PUBLIC RELEASES ARE AD-HOC SIGNED ("-" signingIdentity) and NOT notarized:
+# no paid Developer ID certificate exists or is planned. Users approve the
+# first launch once (Open Anyway, or control-click Open on macOS 14 and
+# earlier — see READ ME FIRST.txt inside the dmg). The existing Apple
+# Development identity (fingerprint E3A26A990308798F8DE4B7C49A3E27BFEF192623,
+# team 2YJ32CEY87) may sign TEST builds only: pass --sign-identity
+# <fingerprint> (or set APPLE_SIGNING_IDENTITY). Set NEBULAE_NO_SIGN=1 to
+# skip sealing entirely for a staging-only rehearsal; the BUILD RECORD then
+# says UNSIGNED TEST.
+if [ -z "$SIGN_IDENTITY" ] && [ "${NEBULAE_NO_SIGN:-0}" != "1" ]; then
+    SIGN_IDENTITY="-"
+fi
 if [ -n "$SIGN_IDENTITY" ]; then
     command -v codesign >/dev/null 2>&1 || { echo "REFUSED: codesign not found" >&2; exit 1; }
     ./scripts/sign-macos-app.sh "$APP_DIR" "$SIGN_IDENTITY"
@@ -223,11 +228,17 @@ echo "sha256: $SHA"
 echo "app zip: $OUT/$DMG_NAME-app.zip"
 echo "commit: $HEAD_SHA  target: $TARGET  version: $VERSION"
 echo "jre: Temurin 21.0.13+9 (pinned, scripts/jre-pins.json key $JRE_KEY)"
-echo "dmg root gate: Nebulae.app, Applications, READ ME FIRST.txt (hash verified), .background/background.png, .VolumeIcon.icns (package-macos-dmg.sh verified all of these on the final image)"
-if [ -n "$SIGN_IDENTITY" ]; then
-echo "signing: identity '$SIGN_IDENTITY' (codesign --verify --deep --strict passed before packaging)"
-else
-echo "signing: UNSIGNED (pass --sign-identity or set APPLE_SIGNING_IDENTITY to seal)"
-fi
+echo "dmg root gate: Nebulae.app, Applications, READ ME FIRST.txt (hash verified), .background/background.png + background@2x.png (hash verified), .VolumeIcon.icns (package-macos-dmg.sh verified all of these on the final image)"
+case "$SIGN_IDENTITY" in
+"")
+echo "signing: UNSIGNED TEST (NEBULAE_NO_SIGN=1 — staging rehearsal only, NOT a candidate)"
+;;
+"-")
+echo "signing: ad-hoc seal (release policy: no Developer ID, not notarized; codesign --verify --deep --strict passed before packaging)"
+;;
+*)
+echo "signing: TEST build, identity '$SIGN_IDENTITY' (codesign --verify --deep --strict passed before packaging)"
+;;
+esac
 } | tee "$OUT/BUILD-RECORD.txt"
 echo "Record installer name, size, SHA-256, gate results and duration on the Task 5 report page."
