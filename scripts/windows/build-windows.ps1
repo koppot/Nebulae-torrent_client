@@ -259,6 +259,11 @@ Write-Host "==> Version gate passed: $($conf.version)."
 # 5.1 turns the first 2>&1 stderr line into a terminating NativeCommandError, so the
 # gates would "fail" on cargo's normal output. Judge them by exit code only.
 $ErrorActionPreference = "Continue"
+# tauri::generate_context! needs the frontendDist folder (../dist, gitignored) to
+# exist even for cargo check (measured: "frontendDist ... doesn't exist" on a
+# fresh checkout). An empty folder is enough; tauri build refills it via pnpm build.
+$distDir = Join-Path $repoRoot "dist"
+if (-not (Test-Path $distDir)) { New-Item -ItemType Directory -Path $distDir | Out-Null }
 Push-Location (Join-Path $repoRoot "src-tauri")
 try {
     cargo check 2>&1 | ForEach-Object { Write-Host "    $_" }
@@ -270,7 +275,13 @@ try {
 }
 Push-Location $repoRoot
 try {
-    & $pnpmCmd exec tsc --noEmit 2>&1 | ForEach-Object { Write-Host "    $_" }
+    $pnpmRest = @('exec', 'tsc', '--noEmit')
+    # "& $array" does not work in PowerShell (measured on Supermicro); split command and args.
+    $pnpmExe = $pnpmCmd[0]
+    $pnpmArgs = @()
+    if ($pnpmCmd.Count -gt 1) { $pnpmArgs += $pnpmCmd[1..($pnpmCmd.Count - 1)] }
+    $pnpmArgs += $pnpmRest
+    & $pnpmExe @pnpmArgs 2>&1 | ForEach-Object { Write-Host "    $_" }
     if ($LASTEXITCODE -ne 0) { throw "frontend typecheck (tsc --noEmit) failed" }
 } finally {
     Pop-Location

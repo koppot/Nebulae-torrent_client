@@ -84,6 +84,8 @@ echo "==> Version gate passed: $CONF_VERSION."
 # release.yml installs the frontend dependencies before anything else; tsc
 # needs node_modules, so this must come BEFORE the gates.
 pnpm install --frozen-lockfile
+# generate_context! needs the gitignored frontendDist folder even for cargo check
+mkdir -p dist
 (cd src-tauri && cargo check && cargo clippy)
 pnpm exec tsc --noEmit
 echo "==> Compile gates passed (cargo check, cargo clippy, tsc --noEmit)."
