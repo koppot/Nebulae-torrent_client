@@ -98,6 +98,10 @@ pub struct DiscRestreamInfo {
     /// MPEG-TS over HTTP) or "renderer" (libvlc casts straight to the
     /// receiver; `url` is empty).
     pub kind: String,
+    /// Identity of this restream (its player pointer); lets a waiter notice
+    /// that the session it started was stopped or replaced. Not sent to the UI.
+    #[serde(skip)]
+    pub session_id: usize,
 }
 
 /// Where the restream goes.
@@ -433,7 +437,62 @@ pub fn start(
         title_index,
         duration_ms,
         kind: kind.to_string(),
+        session_id: mp as usize,
     })
+}
+
+/// Result of `wait_for_segments`.
+#[derive(Debug, PartialEq)]
+pub enum Wait {
+    Ready,
+    /// The restream was stopped (player closed, app exit, user pressed Stop)
+    /// or replaced by another one.
+    Closed,
+    /// The encoder ended before enough segments existed.
+    EncoderEnded,
+    TimedOut,
+}
+
+/// True while restream `session_id` is the live one.
+pub fn is_active(state: &PlayerState, session_id: usize) -> bool {
+    poison(&state.disc_restream)
+        .as_ref()
+        .is_some_and(|r| r.media_player == session_id)
+}
+
+/// Wait until `need` HLS segments are servable. Returns at once, not at the
+/// timeout, when the restream is stopped or replaced. The restream mutex is
+/// held only to clone a probe, never while the segment directory is scanned.
+pub async fn wait_for_segments(
+    state: &PlayerState,
+    session_id: usize,
+    need: usize,
+    timeout: Duration,
+    poll: Duration,
+) -> Wait {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        let probe = {
+            let slot = poison(&state.disc_restream);
+            match slot.as_ref() {
+                Some(r) if r.media_player == session_id => r.lan.as_ref().map(|l| l.probe()),
+                _ => return Wait::Closed,
+            }
+        };
+        let Some(probe) = probe else {
+            return Wait::Closed;
+        };
+        if probe.ready_segments() >= need {
+            return Wait::Ready;
+        }
+        if probe.ended() {
+            return Wait::EncoderEnded;
+        }
+        if std::time::Instant::now() >= deadline {
+            return Wait::TimedOut;
+        }
+        tokio::time::sleep(poll).await;
+    }
 }
 
 /// Stop and release the restream player, if any. Safe to call any time.
@@ -586,6 +645,136 @@ mod tests {
         stop(&state);
         assert!(!dir.exists(), "scratch leaked");
         assert!(state.disc_restream.lock().unwrap().is_none());
+    }
+
+    fn rt() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap()
+    }
+
+    /// A restream slot with a real LAN server over `dir`; ended() = `ended`.
+    fn fake_session(
+        state: &PlayerState,
+        id: usize,
+        dir: &std::path::Path,
+        ended: Arc<std::sync::atomic::AtomicBool>,
+    ) {
+        let lan = hls_cast::LanServer::start(
+            dir.to_path_buf(),
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+            0,
+            Box::new(move || ended.load(Ordering::SeqCst)),
+        )
+        .unwrap();
+        *state.disc_restream.lock().unwrap() = Some(DiscRestream {
+            media_player: id,
+            media: 0,
+            port: 0,
+            title_index: 0,
+            lan: Some(lan),
+            gate: None,
+            scratch: None,
+            renderer_set: false,
+        });
+    }
+
+    fn tmp(tag: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("nebulae-wait-{tag}-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn wait_returns_closed_at_once_when_the_slot_is_empty() {
+        let state = PlayerState::default();
+        let t = std::time::Instant::now();
+        let w = rt().block_on(wait_for_segments(
+            &state,
+            1,
+            2,
+            Duration::from_secs(60),
+            Duration::from_millis(250),
+        ));
+        assert_eq!(w, Wait::Closed);
+        assert!(t.elapsed() < Duration::from_secs(1), "{:?}", t.elapsed());
+    }
+
+    #[test]
+    fn wait_notices_a_stop_mid_wait_and_a_replaced_session() {
+        let dir = tmp("stop");
+        let state = Arc::new(PlayerState::default());
+        fake_session(&state, 5, &dir, Arc::new(Default::default()));
+        let s2 = state.clone();
+        let stopper = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            stop(&s2);
+        });
+        let t = std::time::Instant::now();
+        let w = rt().block_on(wait_for_segments(
+            &state,
+            5,
+            2,
+            Duration::from_secs(60),
+            Duration::from_millis(50),
+        ));
+        stopper.join().unwrap();
+        assert_eq!(w, Wait::Closed);
+        assert!(t.elapsed() < Duration::from_secs(3), "{:?}", t.elapsed());
+        // Another restream took the slot: the old waiter must not wait on it.
+        fake_session(&state, 9, &dir, Arc::new(Default::default()));
+        let w = rt().block_on(wait_for_segments(
+            &state,
+            5,
+            2,
+            Duration::from_secs(60),
+            Duration::from_millis(50),
+        ));
+        assert_eq!(w, Wait::Closed);
+        assert!(!is_active(&state, 5) && is_active(&state, 9));
+        stop(&state);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn wait_reports_ready_ended_and_timeout() {
+        let dir = tmp("ready");
+        let state = PlayerState::default();
+        let ended = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        fake_session(&state, 3, &dir, ended.clone());
+        let wait = |ms| {
+            rt().block_on(wait_for_segments(
+                &state,
+                3,
+                2,
+                Duration::from_millis(ms),
+                Duration::from_millis(20),
+            ))
+        };
+        assert_eq!(wait(150), Wait::TimedOut);
+        // Segments with a real video PES: 3 files -> 2 listed (newest held).
+        for i in 0..3u64 {
+            let mut p = vec![0xFFu8; 188];
+            p[..4].copy_from_slice(&[0x47, 0x41, 0x00, 0x10]);
+            p[4..13].copy_from_slice(&[0, 0, 1, 0xE0, 0, 0, 0x80, 0x80, 5]);
+            let pts = i * 360_000;
+            p[13..18].copy_from_slice(&[
+                0x21 | (((pts >> 30) & 7) << 1) as u8,
+                (pts >> 22) as u8,
+                0x01 | (((pts >> 15) & 0x7f) << 1) as u8,
+                (pts >> 7) as u8,
+                0x01 | ((pts & 0x7f) << 1) as u8,
+            ]);
+            std::fs::write(dir.join(format!("seg-{i:08}.ts")), p).unwrap();
+        }
+        assert_eq!(wait(2000), Wait::Ready);
+        std::fs::remove_file(dir.join("seg-00000001.ts")).unwrap();
+        std::fs::remove_file(dir.join("seg-00000002.ts")).unwrap();
+        ended.store(true, Ordering::SeqCst);
+        assert_eq!(wait(2000), Wait::EncoderEnded);
+        stop(&state);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

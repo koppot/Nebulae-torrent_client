@@ -4573,21 +4573,36 @@ pub async fn player_airplay_disc_start(
             player::disc_restream::RestreamMode::Hls,
         )?
     };
-    // AVPlayer needs at least one finished segment in the playlist.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
-    loop {
-        let ready = poison(&state.disc_restream)
-            .as_ref()
-            .and_then(|r| r.lan.as_ref().map(|l| l.ready_segments()))
-            .unwrap_or(0);
-        if ready >= 2 {
-            break;
+    // AVPlayer needs at least two finished segments in the playlist. The wait
+    // ends at once if the restream is stopped or replaced meanwhile.
+    use player::disc_restream::Wait;
+    match player::disc_restream::wait_for_segments(
+        &state,
+        info.session_id,
+        2,
+        std::time::Duration::from_secs(60),
+        std::time::Duration::from_millis(250),
+    )
+    .await
+    {
+        Wait::Ready => {}
+        Wait::Closed => {
+            return Err("The disc stream was stopped before it was ready".into());
         }
-        if std::time::Instant::now() > deadline {
+        Wait::EncoderEnded => {
+            player::disc_restream::stop(&state);
+            return Err(
+                "The disc stream ended before it produced enough video; check that the disc plays locally"
+                    .into(),
+            );
+        }
+        Wait::TimedOut => {
             player::disc_restream::stop(&state);
             return Err("The disc stream produced no segments within 60 s".into());
         }
-        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+    if !player::disc_restream::is_active(&state, info.session_id) {
+        return Err("The disc stream was stopped before it was ready".into());
     }
     if let Err(e) = player::airplay_macos::implementation::prepare_session_url(&info.url, 0) {
         player::disc_restream::stop(&state);

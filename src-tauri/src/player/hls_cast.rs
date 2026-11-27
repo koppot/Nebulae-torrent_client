@@ -443,6 +443,27 @@ pub fn sweep_orphans(
     removed
 }
 
+/// See `LanServer::probe`.
+pub struct ReadyProbe(Arc<Shared>);
+
+impl ReadyProbe {
+    /// Same meaning as `LanServer::ready_segments`.
+    pub fn ready_segments(&self) -> usize {
+        let ended = self.ended();
+        let n = self.0.segments(ended).len();
+        if ended {
+            n
+        } else {
+            n.saturating_sub(1)
+        }
+    }
+
+    /// The encoder has stopped (finished, failed or was stopped).
+    pub fn ended(&self) -> bool {
+        (self.0.ended)()
+    }
+}
+
 pub struct LanServer {
     shared: Arc<Shared>,
     thread: Option<JoinHandle<()>>,
@@ -506,6 +527,12 @@ impl LanServer {
         } else {
             n.saturating_sub(1)
         }
+    }
+
+    /// A cheap handle that can count segments without borrowing the server
+    /// (so the owner's lock need not be held while the directory is scanned).
+    pub fn probe(&self) -> ReadyProbe {
+        ReadyProbe(self.shared.clone())
     }
 
     pub fn playlist_url(&self, host: &str) -> String {
