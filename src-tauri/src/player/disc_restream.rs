@@ -128,6 +128,77 @@ pub struct DiscRestream {
     pub gate: Option<Arc<PlayerGate>>,
     pub scratch: Option<std::path::PathBuf>,
     pub renderer_set: bool,
+    /// Renderer mode: the held `libvlc_renderer_item_t` reference this
+    /// restream owns; released after the player (see `teardown`).
+    pub renderer_item: usize,
+    /// What the local player was doing before the cast paused it; restored
+    /// exactly when the cast stops.
+    pub local_prior: PriorLocal,
+}
+
+/// Local playback state captured before a cast takes over.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum PriorLocal {
+    Playing,
+    Paused,
+    /// Stopped, ended, buffering, no player...: leave it alone.
+    #[default]
+    Other,
+}
+
+impl PriorLocal {
+    /// From `libvlc_media_player_get_state` (3 Playing, 4 Paused).
+    pub fn from_state(state: i32) -> Self {
+        match state {
+            3 => Self::Playing,
+            4 => Self::Paused,
+            _ => Self::Other,
+        }
+    }
+
+    /// Whether the cast must pause local playback when it starts.
+    pub fn pause_on_cast(self) -> bool {
+        self == Self::Playing
+    }
+
+    /// Whether stopping the cast must resume local playback. A user who had
+    /// paused before casting stays paused.
+    pub fn resume_on_stop(self) -> bool {
+        self == Self::Playing
+    }
+}
+
+/// Take a reference on a renderer item so it outlives the discovery list
+/// entry (the scan can drop it at any time). Release with `release_item`.
+pub fn hold_item(lib: &engine::VlcLib, item: usize) -> Option<usize> {
+    let hold = lib.libvlc_renderer_item_hold?;
+    let held = unsafe { hold(item as *mut std::os::raw::c_void) };
+    (!held.is_null()).then_some(held as usize)
+}
+
+pub fn release_item(lib: &engine::VlcLib, item: usize) {
+    if item == 0 {
+        return;
+    }
+    if let Some(release) = lib.libvlc_renderer_item_release {
+        unsafe { release(item as *mut std::os::raw::c_void) };
+    }
+}
+
+/// Remember the local state the cast found and return it.
+pub fn set_local_prior(state: &PlayerState, prior: PriorLocal) {
+    if let Some(r) = poison(&state.disc_restream).as_mut() {
+        r.local_prior = prior;
+    }
+}
+
+/// What to restore on stop, read BEFORE the restream is torn down. `Other`
+/// when no restream is active (nothing of ours to undo).
+pub fn local_prior(state: &PlayerState) -> PriorLocal {
+    poison(&state.disc_restream)
+        .as_ref()
+        .map(|r| r.local_prior)
+        .unwrap_or_default()
 }
 
 /// The proven transcode + HTTP chain for `port`. Pure; unit-tested.
@@ -171,7 +242,31 @@ fn primary_lan_ipv4() -> Option<std::net::IpAddr> {
 /// Start streaming the current disc's main feature. Requires an ACTIVE
 /// disc session (the shared instance and the title snapshot come from it);
 /// the local playback keeps running untouched.
+///
+/// In `Renderer` mode the caller passes a HELD renderer item (see
+/// `hold_item`) and this function takes ownership of that reference: it is
+/// released here on every failure and by `stop` after success.
 pub fn start(
+    state: &PlayerState,
+    resolved_path: &str,
+    port: u16,
+    mode: RestreamMode,
+) -> Result<DiscRestreamInfo, String> {
+    let held = match &mode {
+        RestreamMode::Renderer { item, .. } => *item,
+        _ => 0,
+    };
+    let r = start_inner(state, resolved_path, port, mode);
+    if r.is_err() && held != 0 {
+        let lib = poison(&state.lib).as_ref().cloned();
+        if let Some(lib) = lib {
+            release_item(&lib, held);
+        }
+    }
+    r
+}
+
+fn start_inner(
     state: &PlayerState,
     resolved_path: &str,
     port: u16,
@@ -416,6 +511,12 @@ pub fn start(
         gate,
         scratch,
         renderer_set,
+        renderer_item: if let RestreamMode::Renderer { item, .. } = &mode {
+            *item
+        } else {
+            0
+        },
+        local_prior: PriorLocal::Other,
     };
     let rejected = match state.disc_restream.lock() {
         Ok(mut slot) => {
@@ -424,7 +525,9 @@ pub fn start(
         }
         Err(_) => Some(rs),
     };
-    if let Some(rs) = rejected {
+    if let Some(mut rs) = rejected {
+        // The caller (`start`) releases the held item on this Err.
+        rs.renderer_item = 0;
         teardown(rs, Some(lib.clone()));
         return Err("player state poisoned: restream player released, not started".into());
     }
@@ -526,6 +629,7 @@ fn teardown(mut rs: DiscRestream, lib: Option<Arc<engine::VlcLib>>) {
         g.close();
     }
     let scratch = rs.scratch.take();
+    let lib_for_item = lib.clone();
     match lib {
         Some(lib) => {
             let mp_ptr = rs.media_player as *mut std::os::raw::c_void;
@@ -545,6 +649,13 @@ fn teardown(mut rs: DiscRestream, lib: Option<Arc<engine::VlcLib>>) {
             "[disc-restream] lib unavailable; restream handles not released (port={})",
             rs.port
         ),
+    }
+    // The player is gone; only now may the renderer item reference go.
+    if rs.renderer_item != 0 {
+        match &lib_for_item {
+            Some(lib) => release_item(lib, rs.renderer_item),
+            None => tracing::error!("[disc-restream] lib unavailable; renderer item not released"),
+        }
     }
     if let Some(d) = scratch {
         let _ = std::fs::remove_dir_all(d);
@@ -641,6 +752,8 @@ mod tests {
             gate: Some(PlayerGate::new(0)),
             scratch: Some(dir.clone()),
             renderer_set: false,
+            renderer_item: 0,
+            local_prior: PriorLocal::Other,
         });
         stop(&state);
         assert!(!dir.exists(), "scratch leaked");
@@ -677,6 +790,8 @@ mod tests {
             gate: None,
             scratch: None,
             renderer_set: false,
+            renderer_item: 0,
+            local_prior: PriorLocal::Other,
         });
     }
 
@@ -774,6 +889,42 @@ mod tests {
         ended.store(true, Ordering::SeqCst);
         assert_eq!(wait(2000), Wait::EncoderEnded);
         stop(&state);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn prior_local_state_is_restored_exactly() {
+        // libvlc states: 0 NothingSpecial 1 Opening 2 Buffering 3 Playing
+        // 4 Paused 5 Stopped 6 Ended 7 Error
+        let cases = [
+            (3, PriorLocal::Playing, true, true),
+            (4, PriorLocal::Paused, false, false),
+            (0, PriorLocal::Other, false, false),
+            (2, PriorLocal::Other, false, false),
+            (5, PriorLocal::Other, false, false),
+            (6, PriorLocal::Other, false, false),
+            (7, PriorLocal::Other, false, false),
+        ];
+        for (st, want, pause, resume) in cases {
+            let p = PriorLocal::from_state(st);
+            assert_eq!(p, want, "state {st}");
+            assert_eq!(p.pause_on_cast(), pause, "state {st}");
+            assert_eq!(p.resume_on_stop(), resume, "state {st}");
+        }
+    }
+
+    #[test]
+    fn prior_is_stored_with_the_restream_and_absent_without_one() {
+        let state = PlayerState::default();
+        assert_eq!(local_prior(&state), PriorLocal::Other, "no restream");
+        set_local_prior(&state, PriorLocal::Paused); // no slot: no-op
+        let dir = tmp("prior");
+        fake_session(&state, 4, &dir, Arc::new(Default::default()));
+        assert_eq!(local_prior(&state), PriorLocal::Other);
+        set_local_prior(&state, PriorLocal::Paused);
+        assert_eq!(local_prior(&state), PriorLocal::Paused);
+        stop(&state);
+        assert_eq!(local_prior(&state), PriorLocal::Other, "gone after stop");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

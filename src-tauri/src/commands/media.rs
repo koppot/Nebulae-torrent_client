@@ -4492,22 +4492,39 @@ pub fn player_cast_renderer_start(
     if device_id.starts_with("airplay:") {
         return Err("AirPlay devices use player_device_start / player_airplay_disc_start".into());
     }
-    let item = poison(&state.discovery_manager)
-        .as_ref()
-        .and_then(|dm| dm.get_device(&device_id))
-        .map(|d| d.native_item)
-        .filter(|i| *i != 0)
-        .ok_or("That device is no longer discovered; rescan and try again")?;
     let _mp_guard = state
         .media_player_cell
         .lock()
         .map_err(|_| "player state poisoned")?;
+    let lib = loaded_lib(&state)?;
+    // Take our own reference on the renderer item while the discovery list
+    // still owns it; the scan may drop the list entry at any moment.
+    let item = {
+        let dm = poison(&state.discovery_manager);
+        let native = dm
+            .as_ref()
+            .and_then(|dm| dm.get_device(&device_id))
+            .map(|d| d.native_item)
+            .filter(|i| *i != 0)
+            .ok_or("That device is no longer discovered; rescan and try again")?;
+        player::disc_restream::hold_item(&lib, native)
+            .ok_or("This libvlc cannot keep a renderer reference; casting is unavailable")?
+    };
     let resolved = poison(&state.current_resolved)
         .clone()
         .or_else(|| poison(&state.current_path).clone())
-        .ok_or("No media is loaded; start playback first")?;
-    let lib = loaded_lib(&state)?;
+        .ok_or_else(|| {
+            player::disc_restream::release_item(&lib, item);
+            "No media is loaded; start playback first"
+        })?;
     let mp = *poison(&state.media_player);
+    let prior = if mp != 0 {
+        player::disc_restream::PriorLocal::from_state(unsafe {
+            (lib.libvlc_media_player_get_state)(mp as *mut c_void)
+        })
+    } else {
+        player::disc_restream::PriorLocal::Other
+    };
     let start_time_s = if mp != 0 {
         (unsafe { (lib.libvlc_media_player_get_time)(mp as *mut c_void) }.max(0) as f64) / 1000.0
     } else {
@@ -4519,11 +4536,13 @@ pub fn player_cast_renderer_start(
         player::disc_restream::DEFAULT_PORT,
         player::disc_restream::RestreamMode::Renderer { item, start_time_s },
     )?;
-    if mp != 0 {
+    player::disc_restream::set_local_prior(&state, prior);
+    if mp != 0 && prior.pause_on_cast() {
         unsafe {
             if let Some(set_pause) = lib.libvlc_media_player_set_pause {
                 set_pause(mp as *mut c_void, 1);
             } else {
+                // pause is a toggle: only reached while Playing.
                 (lib.libvlc_media_player_pause)(mp as *mut c_void);
             }
         }
@@ -4538,13 +4557,17 @@ pub fn player_cast_renderer_stop(state: tauri::State<PlayerState>) -> Result<(),
         .media_player_cell
         .lock()
         .map_err(|_| "player state poisoned")?;
+    // Read the pre-cast state before the restream (which stores it) is gone.
+    let prior = player::disc_restream::local_prior(&state);
     player::disc_restream::stop(&state);
     let mp = *poison(&state.media_player);
-    if mp != 0 {
+    if mp != 0 && prior.resume_on_stop() {
         let lib = loaded_lib(&state)?;
         unsafe {
             if let Some(set_pause) = lib.libvlc_media_player_set_pause {
                 set_pause(mp as *mut c_void, 0);
+            } else if (lib.libvlc_media_player_get_state)(mp as *mut c_void) == 4 {
+                (lib.libvlc_media_player_pause)(mp as *mut c_void);
             }
         }
     }
