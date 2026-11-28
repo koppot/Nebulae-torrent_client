@@ -16,6 +16,11 @@
 #   ./scripts/build-entry-macos.sh --commit <FULL SHA> --version 0.2.9 \
 #       --target aarch64-apple-darwin|x86_64-apple-darwin [--out DIR]
 #
+# --verify-only: no rebuild. Runs only the commit gate, the version gate and the
+# post-build steps (artifact checksums, read-only mount check of the existing
+# dmg, baseline-diff gate, BUILD-RECORD.txt) on an existing --out directory, for
+# replaying the end of a build on real artifacts. The record says VERIFY-ONLY.
+#
 # Outputs go to --out (default: ../nebulae-mac-out next to the checkout), never
 # into the repository. Nothing is pushed, tagged, released or installed.
 #
@@ -27,6 +32,7 @@ set -euo pipefail
 
 COMMIT=""; VERSION=""; TARGET="aarch64-apple-darwin"; OUT=""; SIGN_IDENTITY="${APPLE_SIGNING_IDENTITY:-}"
 BASELINE="${NEBULAE_BASELINE_DMG:-}"
+VERIFY_ONLY=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --commit) COMMIT="$2"; shift 2 ;;
@@ -35,6 +41,7 @@ while [ $# -gt 0 ]; do
         --out) OUT="$2"; shift 2 ;;
         --sign-identity) SIGN_IDENTITY="$2"; shift 2 ;;
         --baseline) BASELINE="$2"; shift 2 ;;
+        --verify-only) VERIFY_ONLY=1; shift ;;
         *) echo "unknown arg: $1" >&2; exit 2 ;;
     esac
 done
@@ -55,6 +62,20 @@ echo "==> Commit gate passed: HEAD = $HEAD_SHA, worktree clean."
 [ -n "$OUT" ] || OUT="$(dirname "$PWD")/nebulae-mac-out"
 case "$OUT" in "$PWD"|"$PWD"/*) echo "REFUSED: --out must be outside the repository" >&2; exit 1 ;; esac
 
+# --verify-only skips everything from here to the end of step 7 (geo, tools,
+# compile, staging, tauri build, signing, packaging). The block is not
+# re-indented to keep the diff of the build path reviewable.
+if [ "$VERIFY_ONLY" = 1 ]; then
+    [ -f "$OUT/$DMG_NAME" ] || { echo "REFUSED: --verify-only needs an existing $OUT/$DMG_NAME" >&2; exit 1; }
+    for f in "$DMG_NAME" "$DMG_NAME-app.zip"; do
+        [ -f "$OUT/$f" ] && [ -f "$OUT/$f.sha256" ] || { echo "REFUSED: --verify-only needs $OUT/$f and $OUT/$f.sha256" >&2; exit 1; }
+        (cd "$OUT" && shasum -a 256 -c "$f.sha256") || { echo "FAIL: checksum of $OUT/$f does not match its .sha256" >&2; exit 1; }
+    done
+    CONF_VERSION=$(python3 -c "import json;print(json.load(open('src-tauri/tauri.conf.json'))['version'])")
+    [ "$CONF_VERSION" = "$VERSION" ] || { echo "REFUSED: tauri.conf.json version $CONF_VERSION != expected $VERSION" >&2; exit 1; }
+    echo "==> VERIFY-ONLY: no rebuild; checking the existing artifacts in $OUT"
+fi
+if [ "$VERIFY_ONLY" != 1 ]; then
 # --- 1b. Geo assets (locked input; never committed, MaxMind terms) ---------
 # Fetched and hash-verified after the commit gate and BEFORE the compile
 # gates; the GEO gate refuses missing or mismatched files.
@@ -209,7 +230,13 @@ LAYOUT_ARGS=()
 ditto -c -k --sequesterRsrc --keepParent "$APP_DIR" "$OUT/$DMG_NAME-app.zip"
 (cd "$OUT" && shasum -a 256 "$DMG_NAME-app.zip" > "$DMG_NAME-app.zip.sha256")
 
+fi  # end of the build-only steps (1b to 7)
+
 # --- 8. Read-only mount check of the final dmg (nothing is installed) -------
+# hdiutil refuses a second attach of an image that is already mounted
+# ("Resource busy"), and step 9 (baseline_diff.py) mounts the same dmg itself.
+# So this mount MUST be detached before step 9; the EXIT trap only covers the
+# failure paths in between.
 MNT=$(mktemp -d "${TMPDIR:-/tmp}/nebulae-dmg-check.XXXXXX")
 hdiutil attach -readonly -nobrowse -noverify -mountpoint "$MNT" "$OUT/$DMG_NAME" >/dev/null
 trap 'hdiutil detach "$MNT" >/dev/null 2>&1 || true; rmdir "$MNT" 2>/dev/null || true' EXIT
@@ -224,6 +251,14 @@ case "$MNT_BUILD_ID" in
 esac
 ./scripts/verify-macos-app.sh "$MOUNTED_APP" || { [ "$TARGET" != "aarch64-apple-darwin" ] || { echo "FAIL: verify-macos-app.sh on the mounted dmg" >&2; exit 1; }; }
 echo "==> Mounted dmg check passed (read-only; nothing installed)."
+# Detach now (retry once, then force: Spotlight or a scanner can hold it for a
+# moment). A mount that stays attached would make step 9 fail, so this is fatal.
+if ! hdiutil detach "$MNT" >/dev/null 2>&1; then
+    sleep 2
+    hdiutil detach -force "$MNT" >/dev/null 2>&1 || { echo "FAIL: could not detach $MNT after the mounted dmg check (step 9 would find the image busy)" >&2; exit 1; }
+fi
+rmdir "$MNT" 2>/dev/null || true
+trap - EXIT
 
 # --- 9. Baseline-diff gate (completeness rules item 1) ----------------------
 # Compares the delivered dmg against the accepted baseline dmg by RELATIVE
@@ -253,6 +288,9 @@ if [ -n "$BASELINE" ]; then
     BASELINE_DIFF_STATUS="PASS vs $(basename "$BASELINE") (report: $OUT/baseline-diff.md)"
 fi
 
+# A VERIFY-ONLY record must never replace the record of a real build.
+RECORD_NAME="BUILD-RECORD.txt"
+[ "$VERIFY_ONLY" != 1 ] || RECORD_NAME="BUILD-RECORD-VERIFY-ONLY.txt"
 SIZE=$(stat -f%z "$OUT/$DMG_NAME")
 SHA=$(shasum -a 256 "$OUT/$DMG_NAME" | awk '{print $1}')
 {
@@ -261,9 +299,18 @@ echo "installer: $OUT/$DMG_NAME"
 echo "size: $SIZE bytes"
 echo "sha256: $SHA"
 echo "app zip: $OUT/$DMG_NAME-app.zip"
+if [ "$VERIFY_ONLY" = 1 ]; then
+echo "mode: VERIFY-ONLY (no rebuild; these artifacts were NOT produced by this run)"
+echo "checked at commit: $HEAD_SHA  target: $TARGET  version: $VERSION"
+echo "built from (id embedded in the delivered app): $MNT_BUILD_ID"
+else
 echo "commit: $HEAD_SHA  target: $TARGET  version: $VERSION"
+fi
 echo "jre: Temurin 21.0.13+9 (pinned, scripts/jre-pins.json key $JRE_KEY)"
 echo "dmg root gate: Nebulae.app, Applications, READ ME FIRST.txt (hash verified), .background/background.png + background@2x.png (hash verified), .VolumeIcon.icns (package-macos-dmg.sh verified all of these on the final image)"
+if [ "$VERIFY_ONLY" = 1 ]; then
+echo "signing: not re-derived in VERIFY-ONLY mode (the signing step belongs to the build run)"
+else
 case "$SIGN_IDENTITY" in
 "")
 echo "signing: UNSIGNED TEST (NEBULAE_NO_SIGN=1 — staging rehearsal only, NOT a candidate)"
@@ -275,6 +322,7 @@ echo "signing: ad-hoc seal (release policy: no Developer ID, not notarized; code
 echo "signing: TEST build, identity '$SIGN_IDENTITY' (codesign --verify --deep --strict passed before packaging)"
 ;;
 esac
+fi
 echo "baseline-diff gate: $BASELINE_DIFF_STATUS"
-} | tee "$OUT/BUILD-RECORD.txt"
+} | tee "$OUT/$RECORD_NAME"
 echo "Record installer name, size, SHA-256, gate results and duration on the Task 5 report page."
