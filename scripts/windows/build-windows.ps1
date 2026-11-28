@@ -286,8 +286,15 @@ Push-Location (Join-Path $repoRoot "src-tauri")
 try {
     cargo check 2>&1 | ForEach-Object { Write-Host "    $_" }
     if ($LASTEXITCODE -ne 0) { throw "cargo check failed" }
-    cargo clippy 2>&1 | ForEach-Object { Write-Host "    $_" }
-    if ($LASTEXITCODE -ne 0) { throw "cargo clippy failed" }
+    $clippyOut = @(cargo clippy 2>&1 | ForEach-Object { Write-Host "    $_"; "$_" })
+    if ($LASTEXITCODE -ne 0) {
+        if (($clippyOut -join "`n") -match "cargo-clippy(\.exe)? is not installed") {
+            throw ("the clippy component is missing from the pinned toolchain (Supermicro 2026-11-28). This script installs nothing: " +
+                   "run 'rustup component add --toolchain stable-x86_64-pc-windows-gnu clippy' once as the toolchain's owner " +
+                   "(a user-approved toolchain install; list it in the report), then re-run.")
+        }
+        throw "cargo clippy failed"
+    }
 } finally {
     Pop-Location
 }
