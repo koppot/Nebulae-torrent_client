@@ -89,8 +89,11 @@ fn main() {
         }
     }
 
-    #[cfg(target_os = "macos")]
-    {
+    // A build script's #[cfg(target_os)] describes the HOST it was compiled for,
+    // not the target being built, so the target comes from cargo's environment.
+    // (A host-cfg here made "cargo check --target x86_64-pc-windows-gnu" from a
+    // Mac emit Apple framework links for a Windows target.)
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
         println!("cargo:rustc-link-lib=framework=AVFoundation");
         println!("cargo:rustc-link-lib=framework=AVKit");
     }
