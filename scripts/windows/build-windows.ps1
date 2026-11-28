@@ -274,6 +274,14 @@ $ErrorActionPreference = "Continue"
 # fresh checkout). An empty folder is enough; tauri build refills it via pnpm build.
 $distDir = Join-Path $repoRoot "dist"
 if (-not (Test-Path $distDir)) { New-Item -ItemType Directory -Path $distDir | Out-Null }
+# tsc runs from node_modules; this script installs nothing, so a fresh clone
+# must have had its frozen frontend install first. Fail with the instruction
+# instead of a bare "tsc not found" from the typecheck (checked before the
+# long cargo gates so the failure is immediate).
+if (-not (Test-Path -LiteralPath (Join-Path $repoRoot "node_modules"))) {
+    throw ("node_modules is missing in ${repoRoot}: run '$($pnpmCmd -join ' ') install --frozen-lockfile' there once " +
+           "(frontend dependencies from the lockfile; list it as installed in the report), then re-run this script.")
+}
 Push-Location (Join-Path $repoRoot "src-tauri")
 try {
     cargo check 2>&1 | ForEach-Object { Write-Host "    $_" }
