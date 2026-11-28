@@ -14,28 +14,26 @@ param(
 )
 $ErrorActionPreference = "Stop"
 
-if (-not (Test-Path $BuiltExe)) { throw "REFUSED: $BuiltExe does not exist" }
+if (-not (Test-Path -LiteralPath $BuiltExe)) { throw "REFUSED: $BuiltExe does not exist" }
 $head = (& git rev-parse HEAD).Trim()
 $expected = "$head-clean"
 
 # Extract the embedded build_id: a 40-hex sha followed by -clean or -dirty.
+# Raw byte scan only. Sysinternals strings.exe is NOT used: when it is absent,
+# "& strings.exe" is a terminating CommandNotFoundException under
+# $ErrorActionPreference = "Stop" (the fallback never ran), and on its first run
+# it shows a licence dialog that blocks a non-interactive session.
 $found = $null
-foreach ($line in (& strings.exe -a $BuiltExe 2>$null)) {
-    if ($line -match '([0-9a-f]{40})-(clean|dirty)') { $found = $Matches[1] + "-" + $Matches[2]; break }
-}
-if (-not $found) {
-    # strings.exe (Sysinternals) may be absent; fall back to a raw scan.
-    $bytes = [System.IO.File]::ReadAllBytes($BuiltExe)
-    $text = [System.Text.Encoding]::ASCII.GetString($bytes)
-    # Search for the EXPECTED full id first: a generic first match could be
-    # a stale string embedded by a dependency. The generic pattern is only a
-    # reporting fallback; the equality checks below still decide.
-    $m = [regex]::Match($text, [regex]::Escape($expected))
-    if ($m.Success) { $found = $expected }
-    else {
-        $m = [regex]::Match($text, '([0-9a-f]{40})-(clean|dirty)')
-        if ($m.Success) { $found = $m.Groups[1].Value + "-" + $m.Groups[2].Value }
-    }
+$bytes = [System.IO.File]::ReadAllBytes((Resolve-Path -LiteralPath $BuiltExe).Path)
+$text = [System.Text.Encoding]::ASCII.GetString($bytes)
+# Search for the EXPECTED full id first: a generic first match could be a
+# stale string embedded by a dependency. The generic pattern is only a
+# reporting fallback; the equality checks below still decide.
+$m = [regex]::Match($text, [regex]::Escape($expected))
+if ($m.Success) { $found = $expected }
+else {
+    $m = [regex]::Match($text, '([0-9a-f]{40})-(clean|dirty)')
+    if ($m.Success) { $found = $m.Groups[1].Value + "-" + $m.Groups[2].Value }
 }
 if (-not $found) { throw "FAIL: could not read the embedded build_id from $BuiltExe" }
 
