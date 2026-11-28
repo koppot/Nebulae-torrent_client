@@ -669,15 +669,13 @@ mod windows_impl {
             WM_COMMAND => {
                 match wparam.0 as u16 {
                     1001 => activate_main_window(),
-                    1002 => {
-                        let _ = PostQuitMessage(0);
-                    }
+                    1002 => PostQuitMessage(0),
                     _ => {}
                 }
                 LRESULT(0)
             }
             WM_DESTROY => {
-                let _ = PostQuitMessage(0);
+                PostQuitMessage(0);
                 LRESULT(0)
             }
             // Reposition immediately on display resolution change, DPI change, or
@@ -701,7 +699,7 @@ mod windows_impl {
         let hdc_screen = GetDC(None);
         let mem_dc = windows::Win32::Graphics::Gdi::CreateCompatibleDC(Some(hdc_screen));
 
-        let mut bmi = BITMAPINFO {
+        let bmi = BITMAPINFO {
             bmiHeader: BITMAPINFOHEADER {
                 biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
                 biWidth: width,
@@ -719,14 +717,8 @@ mod windows_impl {
         };
 
         let mut bits: *mut core::ffi::c_void = core::ptr::null_mut();
-        let dib = match CreateDIBSection(
-            Some(hdc_screen),
-            &mut bmi,
-            DIB_RGB_COLORS,
-            &mut bits,
-            None,
-            0,
-        ) {
+        let dib = match CreateDIBSection(Some(hdc_screen), &bmi, DIB_RGB_COLORS, &mut bits, None, 0)
+        {
             Ok(d) => d,
             Err(_) => {
                 let _ = DeleteDC(mem_dc);
@@ -841,11 +833,14 @@ mod windows_impl {
                             }
                             let nx = x + dx;
                             let ny = y + dy;
-                            if nx >= 0 && nx < width && ny >= 0 && ny < height {
-                                if text_mask[(ny * width + nx) as usize] {
-                                    near_dist1 = true;
-                                    break 'outer1;
-                                }
+                            if nx >= 0
+                                && nx < width
+                                && ny >= 0
+                                && ny < height
+                                && text_mask[(ny * width + nx) as usize]
+                            {
+                                near_dist1 = true;
+                                break 'outer1;
                             }
                         }
                     }
@@ -855,11 +850,14 @@ mod windows_impl {
                         for (dx, dy) in [(0, -2), (-1, -2), (-2, -1), (-2, 0), (-2, -2)] {
                             let nx = x + dx;
                             let ny = y + dy;
-                            if nx >= 0 && nx < width && ny >= 0 && ny < height {
-                                if text_mask[(ny * width + nx) as usize] {
-                                    near_dist2 = true;
-                                    break;
-                                }
+                            if nx >= 0
+                                && nx < width
+                                && ny >= 0
+                                && ny < height
+                                && text_mask[(ny * width + nx) as usize]
+                            {
+                                near_dist2 = true;
+                                break;
                             }
                         }
                     }
