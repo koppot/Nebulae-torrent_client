@@ -54,8 +54,11 @@ try {
 
     Write-Host "==> Baseline-diff gate: baseline=$(Split-Path $BaselineSetup -Leaf) candidate=$(Split-Path $CandidateSetup -Leaf)"
     & $python.Source $diff --baseline $baseDir --candidate $candDir --allow $allow
-    if ($LASTEXITCODE -ne 0) {
+    # baseline_diff.py: exit 3 = differences not classified, 4 = it could not run.
+    if ($LASTEXITCODE -eq 3) {
         throw "baseline-diff gate FAILED: differences not classified in scripts/baseline-allow/windows.tsv"
+    } elseif ($LASTEXITCODE -ne 0) {
+        throw "baseline-diff gate COULD NOT RUN (exit $LASTEXITCODE; see the messages above). This is not a classification result."
     }
 } finally {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
