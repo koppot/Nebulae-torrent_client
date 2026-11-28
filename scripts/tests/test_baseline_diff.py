@@ -218,6 +218,38 @@ def main():
             r = run(["--baseline", b3, "--candidate", c3, "--allow", macos_tsv])
             if r.returncode != 0:
                 failures.append(f"listed daemon path was not accepted (exit {r.returncode}): {r.stderr[:160]}")
+
+        # 9. A failed mount reports hdiutil's own message (not only "exit
+        # status 1"), exits 4 (never 3), and detaches the baseline it had
+        # already mounted. Mock hdiutil: attach of cand.dmg is "Resource busy".
+        mockbin = os.path.join(tmp, "mockbin")
+        os.makedirs(mockbin)
+        log = os.path.join(tmp, "mock-hdiutil.log")
+        with open(os.path.join(mockbin, "hdiutil"), "w") as fh:
+            fh.write('#!/bin/sh\n'
+                     'echo "$@" >> "%s"\n'
+                     'case "$1" in\n'
+                     'attach)\n'
+                     '  case "$2" in *cand.dmg) echo "hdiutil: attach failed - Resource busy" >&2; exit 1 ;; esac\n'
+                     '  while [ $# -gt 0 ]; do [ "$1" = -mountpoint ] && mp="$2"; shift; done\n'
+                     '  mkdir -p "$mp/X.app/Contents" ;;\n'
+                     'esac\n' % log)
+        os.chmod(os.path.join(mockbin, "hdiutil"), 0o755)
+        for n in ("base.dmg", "cand.dmg"):
+            open(os.path.join(tmp, n), "wb").close()
+        env = dict(os.environ, PATH=mockbin + os.pathsep + os.environ["PATH"])
+        r = subprocess.run([sys.executable, SCRIPT, "--baseline", os.path.join(tmp, "base.dmg"),
+                            "--candidate", os.path.join(tmp, "cand.dmg")],
+                           capture_output=True, text=True, env=env)
+        if r.returncode != 4:
+            failures.append(f"busy mount exited {r.returncode} (want 4)")
+        if "Resource busy" not in r.stderr + r.stdout:
+            failures.append("busy mount message lacks hdiutil's own text")
+        if "detach" not in open(log).read():
+            failures.append("the baseline mount was not detached after the candidate failed")
+        r = run(["--baseline", os.path.join(tmp, "cand.dmg"), "--candidate", os.path.join(tmp, "cand.dmg")])
+        if r.returncode != 4:
+            failures.append(f"same baseline and candidate exited {r.returncode} (want 4)")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -226,7 +258,7 @@ def main():
         for f in failures:
             print(f"  - {f}")
         return 1
-    print("test_baseline_diff: OK (9 scenarios)")
+    print("test_baseline_diff: OK (10 scenarios)")
     return 0
 
 

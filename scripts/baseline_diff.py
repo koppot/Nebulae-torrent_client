@@ -88,12 +88,24 @@ def normalize_root(root):
         try:
             subprocess.run(["hdiutil", "attach", root, "-readonly", "-nobrowse",
                             "-mountpoint", mount], check=True,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                           stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                           text=True)
         except (OSError, subprocess.CalledProcessError) as exc:
             os.rmdir(mount)
-            raise GateError(f"cannot mount {root}: {exc}") from exc
+            # hdiutil's own message is the only evidence of WHY it failed;
+            # "returned non-zero exit status 1" alone cost a whole build round.
+            detail = (getattr(exc, "stderr", None) or "").strip() or str(exc)
+            hint = ""
+            if "busy" in detail.lower():
+                hint = (" (the image is already mounted by something else; "
+                        "find it with 'hdiutil info' and detach it)")
+            raise GateError(f"cannot mount {root}: {detail}{hint}") from exc
         mount = ("app", mount)
-        apps = [d for d in os.listdir(mount[1]) if d.endswith(".app")]
+        try:
+            apps = [d for d in os.listdir(mount[1]) if d.endswith(".app")]
+        except OSError:
+            cleanup(mount)
+            raise
         if not apps:
             cleanup(mount)
             raise GateError(f"no .app inside {root}")
@@ -138,6 +150,8 @@ def run():
     ap.add_argument("--max-list", type=int, default=40, help="max rows printed per category")
     args = ap.parse_args()
 
+    if os.path.realpath(args.baseline) == os.path.realpath(args.candidate):
+        raise GateError("baseline and candidate are the same path; nothing to compare")
     base_walk, base_mnt = normalize_root(args.baseline)
     try:
         cand_walk, cand_mnt = normalize_root(args.candidate)
