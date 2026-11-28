@@ -849,7 +849,12 @@ pub fn stop_session(app: &tauri::AppHandle, state: &PlayerState) -> u64 {
             {
                 // Offload the slow VLC stop+release to a background OS thread.
                 // The Arc<VlcLib> keeps the library alive until teardown finishes.
-                session.close_in_background(lib, std::sync::Arc::clone(&state.teardown_in_flight));
+                // `lib` is a `&Arc<VlcLib>` borrowed from the mutex guard; the
+                // callee moves its Arc into the thread, so it takes its own clone.
+                session.close_in_background(
+                    std::sync::Arc::clone(lib),
+                    std::sync::Arc::clone(&state.teardown_in_flight),
+                );
             }
             #[cfg(not(target_os = "windows"))]
             {
