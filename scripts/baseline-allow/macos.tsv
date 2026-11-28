@@ -1,17 +1,103 @@
-# macOS baseline-diff allow list — gate: scripts/baseline_diff.py --allow THIS FILE
+# macOS baseline-diff allow list: gate = scripts/baseline_diff.py --allow THIS FILE
 # Baseline: the accepted previous-candidate dmg (SHA-256 56e421fc212f1ebf8118e8f96d8e8d0773edc640cd69a3222f14783f514cc985,
-# recorded on the Task 5 page and the release-completeness rules page).
-# Every difference must match one entry here (exact path, or a directory
-# prefix ending in "/"); anything else FAILS the build. The full per-file
-# report is written next to the artifacts (baseline-diff.md); its component
-# byte totals are part of the release review.
-# NOTE: this comparison walks the .app (below Contents). The dmg ROOT files
-# (READ ME FIRST.txt, .background/*, .DS_Store, .VolumeIcon.icns,
-# Applications link) are verified by the DMG ROOT GATE in
-# package-macos-dmg.sh, not here.
-Resources/resources/jre/	Temurin 21.0.13+9 rebuild noise (same pin both sides; totals reviewed in baseline-diff.md)
-Resources/resources/vlc/lib/libvlc.5.dylib	rebuild/signature noise (measured earlier: 86 of 167,872 B differ)
-Resources/resources/engine/tailscale/	tailscale 1.104.1 rebuild noise (measured +184,386 B between previous candidates)
-Resources/resources/engine/transmission/	transmission rebuild noise; gettext-0.21/libiconv-1.17 licenses present (measured)
-Resources/resources/build-manifest.json	generated at staging; not tracked in git
-MacOS/nebulae	version and code changes between the baseline commit and this candidate
+# staged 2026-11-14 from eaf1553). Candidate measured: dmg built from 4880605 (build 2026-11-28).
+# EXACT PATHS ONLY, one reason each, measured against those two dmgs (Task 5 section 42). No directory
+# prefix is allowed here: a new or changed file outside this list fails the gate (exit 3), including a
+# changed transmission-daemon, which is only listed because its 4 patch markers were measured.
+# A different baseline or a rebuilt dependency set needs this list re-measured, never widened.
+# The dmg ROOT files (READ ME FIRST.txt, .background/*, ...) are verified by the DMG ROOT GATE in
+# package-macos-dmg.sh, not here. Format: relative path TAB reason.
+MacOS/nebulae	main binary: code changes since eaf1553 (build id is checked by the entry script)
+Resources/resources/build-manifest.json	generated at staging (git_rev, time); not tracked in git
+Resources/resources/engine/tailscale/tailscaled	same tailscale 1.104.1 / go1.27.1 module set; with the code signature stripped the two files differ in 1 byte (measured), so only the signature differs
+Resources/resources/engine/transmission/bundled-libraries.json	source-built macos-deps-11 library rebuilt: same soname, version and min macOS 11.0 in bundled-libraries.json; content differs (rebuild)
+Resources/resources/engine/transmission/lib/libdeflate.0.dylib	source-built macos-deps-11 library rebuilt: same soname, version and min macOS 11.0 in bundled-libraries.json; content differs (rebuild)
+Resources/resources/engine/transmission/lib/libevent-2.1.7.dylib	source-built macos-deps-11 library rebuilt: same soname, version and min macOS 11.0 in bundled-libraries.json; content differs (rebuild)
+Resources/resources/engine/transmission/lib/libiconv.2.dylib	source-built macos-deps-11 library rebuilt: same soname, version and min macOS 11.0 in bundled-libraries.json; content differs (rebuild)
+Resources/resources/engine/transmission/lib/libintl.8.dylib	source-built macos-deps-11 library rebuilt: same soname, version and min macOS 11.0 in bundled-libraries.json; content differs (rebuild)
+Resources/resources/engine/transmission/lib/libminiupnpc.21.dylib	source-built macos-deps-11 library rebuilt: same soname, version and min macOS 11.0 in bundled-libraries.json; content differs (rebuild)
+Resources/resources/engine/transmission/lib/libpsl.5.dylib	source-built macos-deps-11 library rebuilt: same soname, version and min macOS 11.0 in bundled-libraries.json; content differs (rebuild)
+Resources/resources/engine/transmission/licenses/gettext-0.21/COPYING	license text of a source-built dependency (d4db53e)
+Resources/resources/engine/transmission/licenses/gettext-0.21/COPYING.LIB	license text of a source-built dependency (d4db53e)
+Resources/resources/engine/transmission/licenses/gettext-1.0/AUTHORS	baseline shipped Homebrew-keg license text; the source-built deps now ship gettext-0.21/libiconv-1.17 (d4db53e) and the libevent, libdeflate, libpsl and miniupnp licenses remain under transmission-4.1.3/third-party/
+Resources/resources/engine/transmission/licenses/gettext-1.0/COPYING	baseline shipped Homebrew-keg license text; the source-built deps now ship gettext-0.21/libiconv-1.17 (d4db53e) and the libevent, libdeflate, libpsl and miniupnp licenses remain under transmission-4.1.3/third-party/
+Resources/resources/engine/transmission/licenses/libdeflate-1.26/COPYING	baseline shipped Homebrew-keg license text; the source-built deps now ship gettext-0.21/libiconv-1.17 (d4db53e) and the libevent, libdeflate, libpsl and miniupnp licenses remain under transmission-4.1.3/third-party/
+Resources/resources/engine/transmission/licenses/libevent-2.1.13_1/LICENSE	baseline shipped Homebrew-keg license text; the source-built deps now ship gettext-0.21/libiconv-1.17 (d4db53e) and the libevent, libdeflate, libpsl and miniupnp licenses remain under transmission-4.1.3/third-party/
+Resources/resources/engine/transmission/licenses/libiconv-1.17/AUTHORS	license text of a source-built dependency (d4db53e)
+Resources/resources/engine/transmission/licenses/libiconv-1.17/COPYING	license text of a source-built dependency (d4db53e)
+Resources/resources/engine/transmission/licenses/libiconv-1.17/COPYING.LIB	license text of a source-built dependency (d4db53e)
+Resources/resources/engine/transmission/licenses/libpsl-0.23.3/AUTHORS	baseline shipped Homebrew-keg license text; the source-built deps now ship gettext-0.21/libiconv-1.17 (d4db53e) and the libevent, libdeflate, libpsl and miniupnp licenses remain under transmission-4.1.3/third-party/
+Resources/resources/engine/transmission/licenses/libpsl-0.23.3/COPYING	baseline shipped Homebrew-keg license text; the source-built deps now ship gettext-0.21/libiconv-1.17 (d4db53e) and the libevent, libdeflate, libpsl and miniupnp licenses remain under transmission-4.1.3/third-party/
+Resources/resources/engine/transmission/licenses/libpsl-0.23.3/LICENSE	baseline shipped Homebrew-keg license text; the source-built deps now ship gettext-0.21/libiconv-1.17 (d4db53e) and the libevent, libdeflate, libpsl and miniupnp licenses remain under transmission-4.1.3/third-party/
+Resources/resources/engine/transmission/licenses/miniupnpc-2.3.3/LICENSE	baseline shipped Homebrew-keg license text; the source-built deps now ship gettext-0.21/libiconv-1.17 (d4db53e) and the libevent, libdeflate, libpsl and miniupnp licenses remain under transmission-4.1.3/third-party/
+Resources/resources/engine/transmission/licenses/transmission-4.1.3/transmission-4.1.3-identity-override.patch	patch text now carries the 4 markers (equals scripts/patches file, sha256 8d4630336f6f...)
+Resources/resources/engine/transmission/transmission-daemon	PATCHED 4-marker daemon (NEBULAE_INTEREST_KEEPALIVE, PEER_ID_PREFIX, PEER_ID_SUFFIX, USER_AGENT all measured present; baseline had 2); bundled identity patch sha256 8d463033... equals scripts/patches/transmission-4.1.3-identity-override.patch; commits a624feb, 2c680f2; verify-macos-app.sh enforces the markers
+Resources/resources/jre/bin/java	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/bin/jfr	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/bin/jrunscript	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/bin/jwebserver	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/bin/keytool	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/bin/rmiregistry	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/conf/security/java.security	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/lib/jrt-fs.jar	libbluray 1.5.0 jar rebuilt: all entries byte-identical (760 and 34 files, no diff after unzip); only archive metadata differs
+Resources/resources/jre/lib/jspawnhelper	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/lib/libawt.dylib	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/lib/libawt_lwawt.dylib	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/lib/libdt_socket.dylib	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/lib/libextnet.dylib	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/lib/libfontmanager.dylib	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/lib/libfreetype.dylib	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/lib/libinstrument.dylib	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/lib/libj2gss.dylib	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/lib/libj2pcsc.dylib	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/lib/libj2pkcs11.dylib	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/lib/libjaas.dylib	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/lib/libjava.dylib	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/lib/libjavajpeg.dylib	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/lib/libjawt.dylib	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/lib/libjdwp.dylib	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/lib/libjimage.dylib	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/lib/libjli.dylib	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/lib/libjsig.dylib	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/lib/libjsound.dylib	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/lib/liblcms.dylib	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/lib/libmanagement.dylib	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/lib/libmanagement_agent.dylib	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/lib/libmanagement_ext.dylib	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/lib/libmlib_image.dylib	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/lib/libnet.dylib	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/lib/libnio.dylib	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/lib/libosx.dylib	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/lib/libosxapp.dylib	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/lib/libosxkrb5.dylib	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/lib/libosxsecurity.dylib	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/lib/libosxui.dylib	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/lib/libprefs.dylib	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/lib/librmi.dylib	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/lib/libsplashscreen.dylib	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/lib/libsyslookup.dylib	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/lib/libverify.dylib	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/lib/libzip.dylib	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/lib/modules	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/lib/security/cacerts	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/lib/security/default.policy	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/lib/server/classes.jsa	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/lib/server/classes_nocoops.jsa	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/lib/server/libjsig.dylib	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/lib/server/libjvm.dylib	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/lib/shaders.metallib	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/lib/tzdb.dat	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/jre/release	JRE: baseline Temurin 21.0.12.1+1, candidate pinned Temurin 21.0.13+9 (scripts/jre-pins.json)
+Resources/resources/vlc/bundled-libraries.json	generated manifest: sha256 fields of the rebuilt libraries below
+Resources/resources/vlc/lib/libbluray-awt-j2se-1.5.0.jar	libbluray 1.5.0 jar rebuilt: all entries byte-identical (760 and 34 files, no diff after unzip); only archive metadata differs
+Resources/resources/vlc/lib/libbluray-j2se-1.5.0.jar	libbluray 1.5.0 jar rebuilt: all entries byte-identical (760 and 34 files, no diff after unzip); only archive metadata differs
+Resources/resources/vlc/lib/libfontconfig.1.dylib	VLC dependency rebuilt: same soname, version, min macOS 11.0; exported symbols and dependencies identical (measured)
+Resources/resources/vlc/lib/libfreetype.6.dylib	VLC dependency rebuilt: same soname, version, min macOS 11.0; exported symbols and dependencies identical (measured)
+Resources/resources/vlc/lib/libintl.8.dylib	VLC dependency rebuilt: same soname, version, min macOS 11.0; exported symbols and dependencies identical (measured)
+Resources/resources/vlc/lib/libpng16.16.dylib	VLC dependency rebuilt: same soname, version, min macOS 11.0; exported symbols and dependencies identical (measured)
+Resources/resources/vlc/lib/libudfread.3.dylib	VLC dependency rebuilt: same soname, version, min macOS 11.0; exported symbols and dependencies identical (measured)
+Resources/resources/vlc/lib/libvlc.5.dylib	rebuilt: 22 bytes differ with the signature stripped (LC_UUID etc.); exported symbols and dependencies identical (measured)
+Resources/resources/vlc/lib/libvlc.dylib	rebuilt: 22 bytes differ with the signature stripped (LC_UUID etc.); exported symbols and dependencies identical (measured)
+Resources/resources/vlc/licenses/vlc-3.0.23/bluray-menu-first.patch	bundled patch equals patches/vlc-3.0.23/bluray-menu-first.patch at this commit (sha256 da8b4115...)
+Resources/resources/vlc/plugins/liblibbluray_plugin.dylib	plugin rebuilt from patches/vlc-3.0.23/bluray-menu-first.patch (changed since eaf1553, AACS handling); exported symbols and dependencies identical (measured)
+_CodeSignature/CodeResources	ad-hoc seal (release policy) instead of the baseline Apple Development seal

@@ -175,6 +175,49 @@ def main():
                  "--allow", os.path.join(tmp, "no-such-allow.tsv")])
         if r.returncode != 4:
             failures.append(f"missing allow file exited {r.returncode} (want 4)")
+
+        # 8. The SHIPPED macos.tsv is exact-paths-only with a reason each, and a
+        # drift outside it fails. Measured 2026-11-28 against the accepted
+        # baseline dmg and the dmg built from 4880605 (94 differences).
+        macos_tsv = os.path.join(HERE, "..", "baseline-allow", "macos.tsv")
+        entries = {}
+        with open(macos_tsv) as fh:
+            for ln in fh:
+                ln = ln.rstrip("\n")
+                if not ln.strip() or ln.startswith("#"):
+                    continue
+                parts = ln.split("\t")
+                if len(parts) < 2 or not parts[1].strip():
+                    failures.append(f"macos.tsv entry without a reason: {parts[0]}")
+                if parts[0].endswith("/"):
+                    failures.append(f"macos.tsv has a directory prefix: {parts[0]}")
+                entries[parts[0]] = parts[1] if len(parts) > 1 else ""
+        daemon = "Resources/resources/engine/transmission/transmission-daemon"
+        if "4-marker" not in entries.get(daemon, "") and "4 markers" not in entries.get(daemon, ""):
+            failures.append("macos.tsv daemon entry must record the 4-marker proof")
+        for probe in ("Resources/resources/jre/lib/NEW-FILE.bin",
+                      "Resources/resources/engine/transmission/NEW-FILE.bin",
+                      "Resources/resources/engine/tailscale/tailscale",
+                      "Resources/resources/vlc/plugins/libother_plugin.dylib",
+                      "Resources/resources/geo/GeoLite2-ASN.mmdb"):
+            b3 = os.path.join(tmp, "b3", "Nebulae.app")
+            c3 = os.path.join(tmp, "c3", "Nebulae.app")
+            shutil.rmtree(os.path.join(tmp, "b3"), ignore_errors=True)
+            shutil.rmtree(os.path.join(tmp, "c3"), ignore_errors=True)
+            build(os.path.join(b3, "Contents"), {probe: b"original" + b"\0" * 16})
+            build(os.path.join(c3, "Contents"), {probe: b"TAMPERED" + b"\0" * 16})
+            r = run(["--baseline", b3, "--candidate", c3, "--allow", macos_tsv])
+            if r.returncode != 3 or probe not in r.stderr:
+                failures.append(f"drift at {probe} was not rejected by macos.tsv (exit {r.returncode})")
+            # Control: the same layout with an entry that IS listed passes, so
+            # the probe paths above are compared in the shape the list uses.
+            build(os.path.join(b3, "Contents"), {daemon: b"original" + b"\0" * 16})
+            build(os.path.join(c3, "Contents"), {daemon: b"TAMPERED" + b"\0" * 16})
+            os.remove(os.path.join(b3, "Contents", *probe.split("/")))
+            os.remove(os.path.join(c3, "Contents", *probe.split("/")))
+            r = run(["--baseline", b3, "--candidate", c3, "--allow", macos_tsv])
+            if r.returncode != 0:
+                failures.append(f"listed daemon path was not accepted (exit {r.returncode}): {r.stderr[:160]}")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -183,7 +226,7 @@ def main():
         for f in failures:
             print(f"  - {f}")
         return 1
-    print("test_baseline_diff: OK (8 scenarios)")
+    print("test_baseline_diff: OK (9 scenarios)")
     return 0
 
 
