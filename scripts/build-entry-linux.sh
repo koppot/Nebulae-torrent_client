@@ -34,7 +34,7 @@ echo "==> Commit gate passed: HEAD = $HEAD_SHA, worktree clean."
 ./scripts/fetch-geo-assets.sh
 ./scripts/check-geo-assets.sh
 
-for tool in git node pnpm rustc cargo python3; do
+for tool in git node pnpm rustc cargo python3 strings sha256sum; do
     command -v "$tool" >/dev/null 2>&1 || { echo "REFUSED: missing tool: $tool" >&2; exit 1; }
 done
 echo "node $(node --version), pnpm $(pnpm --version), $(rustc --version)"
@@ -46,11 +46,15 @@ CONF_VERSION=$(python3 -c "import json;print(json.load(open('src-tauri/tauri.con
 [ "$CONF_VERSION" = "$VERSION" ] || { echo "REFUSED: tauri.conf.json version $CONF_VERSION != expected $VERSION" >&2; exit 1; }
 echo "==> Version gate passed: $CONF_VERSION."
 
+# tsc needs node_modules, so the frozen install comes BEFORE the gates
+# (build-entry-macos.sh does the same; a fresh clone has no node_modules).
+pnpm install --frozen-lockfile
+# generate_context! needs the gitignored frontendDist folder even for cargo check
+mkdir -p dist
 (cd src-tauri && cargo check && cargo clippy)
 pnpm exec tsc --noEmit
 echo "==> Compile gates passed (cargo check, cargo clippy, tsc --noEmit)."
 
-pnpm install --frozen-lockfile
 ./scripts/bundle-linux-transmission.sh
 
 # Clean-tree re-check after staging (staging must never modify tracked files).
