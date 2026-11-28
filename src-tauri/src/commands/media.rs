@@ -3080,8 +3080,12 @@ fn framing_tick(
         return;
     }
 
-    #[cfg(target_os = "windows")]
-    {
+    // `if cfg!` rather than a #[cfg] block: the block ends in `return`, so on
+    // Windows the shared code below was an "unreachable statement" (a hard
+    // error under clippy -D warnings). Everything the branch calls also exists
+    // on the other platforms, and keeping the code below compiled everywhere
+    // keeps its helpers counted as used on Windows (no dead_code warnings).
+    if cfg!(target_os = "windows") {
         let _ = (title, at_menu, playing);
         // Automatic black-bar cropping is disabled on Windows for 0.2.6 (deferred).
         // Ensure any applied crop is cleared and player returns to uncropped 16:9 / source framing.
