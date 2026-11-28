@@ -828,6 +828,12 @@ pub fn sync_frame(
 /// Apply rounded corners to the main window using DwmSetWindowAttribute
 /// (Windows 10 1809+). Best-effort: silently no-ops on older Windows
 /// or if the main HWND is not yet available.
+///
+/// # Safety
+///
+/// Calls Win32/DWM functions on the main window handle. `app` must be the
+/// live application handle, and the caller must be on a thread from which the
+/// main HWND may be touched (the existing callers run it on the main thread).
 pub unsafe fn apply_window_corner_radius(app: &AppHandle, _radius: f64) {
     overlay_app_init(app.clone());
     if let Ok(hwnd) = main_hwnd(app) {
