@@ -2,7 +2,7 @@
 """Kit test for scripts/baseline_diff.py on a synthetic tree.
 
 Covers: relative-path comparison, only-in-baseline / only-in-candidate /
-changed detection, component totals, the --allow gate (exit 1 on any
+changed detection, component totals, the --allow gate (exit 3 on any
 unclassified difference, exit 0 when all are covered, inspection run exits 0
 without --allow), .app-root normalization (Resources/ stripped), and a guard
 on the shipped windows.tsv: no broad directory prefix (geo/vlc/jre/engine)
@@ -78,20 +78,23 @@ def main():
             if needle not in r.stdout:
                 failures.append(f"inspection output missing: {needle!r}")
 
-        # 2. Gate run without allow: exit 1.
+        # 2. Gate run without allow: exit 3. (The empty file must exist: a
+        # missing allow file is "could not run", exit 4, tested in 7.)
+        with open(os.path.join(tmp, "empty.tsv"), "w"):
+            pass
         r = run(["--baseline", base_root, "--candidate", cand_root,
                  "--allow", os.path.join(tmp, "empty.tsv")])
-        if r.returncode != 1:
-            failures.append(f"gate with empty allow exited {r.returncode} (want 1)")
+        if r.returncode != 3:
+            failures.append(f"gate with empty allow exited {r.returncode} (want 3)")
 
-        # 3. Gate run with a PARTIAL allow: exit 1, names the rest.
+        # 3. Gate run with a PARTIAL allow: exit 3, names the rest.
         allow = os.path.join(tmp, "partial.tsv")
         with open(allow, "w") as fh:
             fh.write("READ ME FIRST.txt\trelease adds install steps\n")
         r = run(["--baseline", base_root, "--candidate", cand_root,
                  "--allow", allow])
-        if r.returncode != 1:
-            failures.append(f"gate with partial allow exited {r.returncode} (want 1)")
+        if r.returncode != 3:
+            failures.append(f"gate with partial allow exited {r.returncode} (want 3)")
         if "GATE FAIL: 3" not in r.stderr:
             failures.append("partial-allow stderr should count 3 unclassified")
 
@@ -155,11 +158,23 @@ def main():
             build(c2, {probe: b"TAMPERED CONTENT" + b"\0" * 32})
             r = run(["--baseline", b2, "--candidate", c2,
                      "--allow", windows_tsv])
-            if r.returncode != 1:
+            if r.returncode != 3:
                 failures.append(f"changed file under {prefix} was hidden by "
                                 "windows.tsv (gate exited 0)")
             elif probe not in r.stderr:
                 failures.append(f"gate under {prefix} did not name {probe}")
+
+        # 7. "Could not run" is a different exit code from "not classified":
+        # a missing root and an unreadable allow file exit 4, never 3, and a
+        # real verdict never exits 4.
+        r = run(["--baseline", os.path.join(tmp, "nope"), "--candidate", cand_root,
+                 "--allow", os.path.join(tmp, "full.tsv")])
+        if r.returncode != 4:
+            failures.append(f"missing baseline root exited {r.returncode} (want 4)")
+        r = run(["--baseline", base_root, "--candidate", cand_root,
+                 "--allow", os.path.join(tmp, "no-such-allow.tsv")])
+        if r.returncode != 4:
+            failures.append(f"missing allow file exited {r.returncode} (want 4)")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -168,7 +183,7 @@ def main():
         for f in failures:
             print(f"  - {f}")
         return 1
-    print("test_baseline_diff: OK (7 scenarios)")
+    print("test_baseline_diff: OK (8 scenarios)")
     return 0
 
 

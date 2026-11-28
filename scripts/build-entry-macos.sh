@@ -235,12 +235,21 @@ echo "==> Mounted dmg check passed (read-only; nothing installed)."
 BASELINE_DIFF_STATUS="NOT RUN (no baseline passed)"
 if [ -n "$BASELINE" ]; then
     [ -f "$BASELINE" ] || { echo "FAIL: baseline dmg not found: $BASELINE" >&2; exit 1; }
-    ./scripts/baseline_diff.py \
+    # Run through the interpreter so a lost exec bit cannot break the gate.
+    # baseline_diff.py exits 3 for "differences not classified" and 4 for
+    # "could not run"; anything else (126/127, a Python crash) is also
+    # "could not run" and must not be reported as a classification verdict.
+    GATE_RC=0
+    python3 scripts/baseline_diff.py \
         --baseline "$BASELINE" \
         --candidate "$OUT/$DMG_NAME" \
         --allow scripts/baseline-allow/macos.tsv \
-        --report "$OUT/baseline-diff.md" \
-        || { echo "FAIL: baseline-diff gate — differences not classified in scripts/baseline-allow/macos.tsv (full report: $OUT/baseline-diff.md)" >&2; exit 1; }
+        --report "$OUT/baseline-diff.md" || GATE_RC=$?
+    case "$GATE_RC" in
+        0) ;;
+        3) echo "FAIL: baseline-diff gate — differences not classified in scripts/baseline-allow/macos.tsv (full report: $OUT/baseline-diff.md)" >&2; exit 1 ;;
+        *) echo "FAIL: baseline-diff gate COULD NOT RUN (exit $GATE_RC; 126/127 = not executable or not found, 4 = cannot mount or read an input). This is not a classification result; see the messages above." >&2; exit 1 ;;
+    esac
     BASELINE_DIFF_STATUS="PASS vs $(basename "$BASELINE") (report: $OUT/baseline-diff.md)"
 fi
 

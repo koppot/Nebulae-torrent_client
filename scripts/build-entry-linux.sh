@@ -94,17 +94,21 @@ if [ -n "$BASELINE" ]; then
         echo "FAIL: dpkg-deb could not extract an installer payload" >&2
         exit 1
     fi
-    if ./scripts/baseline_diff.py \
+    # python3 <path>: a lost exec bit cannot break the gate. Exit 3 = differences
+    # not classified; any other non-zero = the gate could not run.
+    GATE_RC=0
+    python3 scripts/baseline_diff.py \
         --baseline "$TMPB/baseline" \
         --candidate "$TMPB/candidate" \
         --allow scripts/baseline-allow/linux.tsv \
-        --report "$(dirname "$NEW_DEB")/baseline-diff.md"; then
-        BASELINE_STATUS="PASS vs $(basename "$BASELINE")"
-    else
-        echo "FAIL: baseline-diff gate — differences not classified in scripts/baseline-allow/linux.tsv (report: $(dirname "$NEW_DEB")/baseline-diff.md)" >&2
-        rm -rf "$TMPB"
-        exit 1
-    fi
+        --report "$(dirname "$NEW_DEB")/baseline-diff.md" || GATE_RC=$?
+    case "$GATE_RC" in
+        0) BASELINE_STATUS="PASS vs $(basename "$BASELINE")" ;;
+        3) echo "FAIL: baseline-diff gate — differences not classified in scripts/baseline-allow/linux.tsv (report: $(dirname "$NEW_DEB")/baseline-diff.md)" >&2
+           rm -rf "$TMPB"; exit 1 ;;
+        *) echo "FAIL: baseline-diff gate COULD NOT RUN (exit $GATE_RC; 126/127 = not executable or not found, 4 = cannot read an input). Not a classification result." >&2
+           rm -rf "$TMPB"; exit 1 ;;
+    esac
     rm -rf "$TMPB"
 fi
 echo "==> baseline-diff gate: $BASELINE_STATUS"

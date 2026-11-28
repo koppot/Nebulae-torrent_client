@@ -21,6 +21,12 @@ byte totals per component (jre, vlc, transmission, tailscale, geo, licenses,
 bdj, bluray, main binary, other). Exit 0 only when EVERY difference is
 covered by the --allow file (TSV: relative path TAB reason). --allow is
 optional for inspection runs; the gate run REQUIRES it.
+
+Exit codes (callers tell "the gate said no" from "the gate could not run"):
+  0  every difference is classified (or an inspection run)
+  3  GATE FAIL: differences not classified in the allow file
+  4  the gate could not run (cannot mount or read a root, bad allow file, ...)
+  2  usage error (argparse)
 """
 import argparse
 import hashlib
@@ -39,6 +45,14 @@ COMPONENTS = [
     ("bdj", "resources/vlc/lib/libbluray-j2se"),
     ("bluray", "resources/vlc/lib/libbluray"),
 ]
+
+
+EXIT_UNCLASSIFIED = 3
+EXIT_CANNOT_RUN = 4
+
+
+class GateError(Exception):
+    """The comparison could not be carried out (not a verdict)."""
 
 
 def sha256(path):
@@ -67,17 +81,23 @@ def normalize_root(root):
     """Return (walk_root, mount_to_cleanup). An .app root is compared below
     Contents so 'Contents/Resources/...' aligns with payload trees."""
     mount = None
+    if not os.path.exists(root):
+        raise GateError(f"root does not exist: {root}")
     if root.lower().endswith(".dmg"):
         mount = tempfile.mkdtemp(prefix="nebulae-baseline-")
-        subprocess.run(["hdiutil", "attach", root, "-readonly", "-nobrowse",
-                        "-mountpoint", mount], check=True,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        apps = [d for d in os.listdir(mount) if d.endswith(".app")]
+        try:
+            subprocess.run(["hdiutil", "attach", root, "-readonly", "-nobrowse",
+                            "-mountpoint", mount], check=True,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except (OSError, subprocess.CalledProcessError) as exc:
+            os.rmdir(mount)
+            raise GateError(f"cannot mount {root}: {exc}") from exc
+        mount = ("app", mount)
+        apps = [d for d in os.listdir(mount[1]) if d.endswith(".app")]
         if not apps:
             cleanup(mount)
-            sys.exit(f"ERROR: no .app inside {root}")
-        root = os.path.join(mount, apps[0])
-        mount = ("app", mount)
+            raise GateError(f"no .app inside {root}")
+        root = os.path.join(mount[1], apps[0])
     if os.path.basename(root).endswith(".app"):
         contents = os.path.join(root, "Contents")
         if os.path.isdir(contents):
@@ -109,7 +129,7 @@ def scan(walk):
     return out
 
 
-def main():
+def run():
     ap = argparse.ArgumentParser()
     ap.add_argument("--baseline", required=True)
     ap.add_argument("--candidate", required=True)
@@ -119,7 +139,11 @@ def main():
     args = ap.parse_args()
 
     base_walk, base_mnt = normalize_root(args.baseline)
-    cand_walk, cand_mnt = normalize_root(args.candidate)
+    try:
+        cand_walk, cand_mnt = normalize_root(args.candidate)
+    except GateError:
+        cleanup(base_mnt)
+        raise
     try:
         base = scan(base_walk)
         cand = scan(cand_walk)
@@ -202,10 +226,18 @@ def main():
             print(f"  {r}", file=sys.stderr)
         if len(unclassified) > args.max_list:
             print(f"  ... {len(unclassified) - args.max_list} more", file=sys.stderr)
-        return 1
+        return EXIT_UNCLASSIFIED
     print(f"\nGATE PASS: all {len(only_base) + len(only_cand) + len(changed)} "
           "differences are classified in the allow file")
     return 0
+
+
+def main():
+    try:
+        return run()
+    except (GateError, OSError) as exc:
+        print(f"GATE COULD NOT RUN: {exc}", file=sys.stderr)
+        return EXIT_CANNOT_RUN
 
 
 if __name__ == "__main__":
