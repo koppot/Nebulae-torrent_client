@@ -5683,6 +5683,11 @@ mod tests {
     #[test]
     fn test_player_device_list_labels_airplay_entry() {
         let list = player_device_list_inner(None);
+        #[cfg(not(target_os = "macos"))]
+        assert!(
+            list.is_empty(),
+            "no built-in device may be listed off macOS (no discovery manager passed)"
+        );
         #[cfg(target_os = "macos")]
         {
             let airplay_dev = list.iter().find(|d| d.id == "airplay:default");
