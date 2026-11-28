@@ -187,5 +187,9 @@ def main():
     return 0
 
 
+def test_baseline_diff():
+    assert main() == 0
+
+
 if __name__ == "__main__":
     sys.exit(main())
