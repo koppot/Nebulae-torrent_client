@@ -81,12 +81,14 @@ def main() -> int:
     rep = Report()
 
     if args.installer:
+        SevenZ = find_7z()  # before mkdtemp: a SystemExit here must not leave a temp dir
         tmp = Path(tempfile.mkdtemp(prefix="nebulae-verify-"))
-        SevenZ = find_7z()
         r = subprocess.run([SevenZ, "x", "-y", f"-o{tmp}", str(args.installer)],
                            capture_output=True, text=True)
         if r.returncode != 0:
             print(r.stdout[-2000:], r.stderr[-2000:])
+            if not args.keep:
+                shutil.rmtree(tmp, ignore_errors=True)
             return 2
         root = tmp
         n_entries = sum(1 for _ in root.rglob("*"))
