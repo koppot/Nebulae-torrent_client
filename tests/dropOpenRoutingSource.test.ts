@@ -10,8 +10,9 @@ test('native and HTML drops share one multi-path dispatcher', () => {
   const modal = read('../src/components/modals/AddTorrentModal.tsx');
   const store = read('../src/stores/uiStore.ts');
 
-  assert.match(app, /listen<\{ paths\?: string\[\]; position\?: \{ x: number; y: number \} \}>\('tauri:\/\/drag-drop'/);
-  assert.match(app, /listen<string\[\]>\('nebulae:\/\/paths-dropped'/);
+  // safeListen wraps listen with an unmount guard; both forms are the same subscription.
+  assert.match(app, /(?:safeListen|listen)<\{ paths\?: string\[\]; position\?: \{ x: number; y: number \} \}>\('tauri:\/\/drag-drop'/);
+  assert.match(app, /(?:safeListen|listen)<string\[\]>\('nebulae:\/\/paths-dropped'/);
   assert.match(app, /classify_dropped_media_path/);
   assert.match(app, /Promise\.all\(files\.map\(async \(file\)/);
   assert.match(app, /readTorrentFileAsDataUrl\(file\)/);
